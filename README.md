@@ -1,2 +1,0 @@
-# NextStop
-Travel Itinerary Planner
