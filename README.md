@@ -6,12 +6,12 @@ NextStop is an application designed to help users plan and manage trips by ident
 
 This repository represents the **early stages of development** for a **senior capstone project**, which is being implemented over a **four-month period**. The project is currently under active development.
 
-## 🚧 Project Status
+## Project Status
 **In Progress — Not Yet Available for Use**
 
 The core functionality, website access, and database integration are still being built. As a result, the application is not yet fully functional or accessible to end users. This repository will continue to be updated as development progresses throughout the capstone timeline.
 
-## 📱 Planned Features
+## Planned Features
 - View upcoming stops or destinations
 - User-friendly interface for trip planning
 - Dynamic updates based on user input
@@ -19,14 +19,14 @@ The core functionality, website access, and database integration are still being
 - Database-backed storage for routes and user data
 - Scalable architecture to support future expansion
 
-## 🛠️ Built With
+## Built With
 *(Planned / In Progress — update as development continues)*
 - Frontend: React / HTML / CSS / JavaScript
 - Backend: Node.js / Express
 - Database: MongoDB / Firebase
-- APIs: (if applicable)
+- APIs: Geoapify
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Node.js and npm
