@@ -12,6 +12,7 @@ type InterestKey =
 
 type GenerateItineraryBody = {
   destinationCity?: unknown;
+  cityScope?: unknown;
   days?: unknown;
   interests?: unknown;
   constraints?: {
@@ -21,6 +22,15 @@ type GenerateItineraryBody = {
 };
 
 type SaveItineraryBody = {
+  title?: unknown;
+  tripInput?: unknown;
+  itineraryDays?: unknown;
+  metadata?: unknown;
+  notes?: unknown;
+  unassignedActivities?: unknown;
+};
+
+type UpdateItineraryBody = {
   title?: unknown;
   tripInput?: unknown;
   itineraryDays?: unknown;
@@ -40,6 +50,7 @@ type Activity = {
   id: string;
   name: string;
   category: string;
+  categories: string[];
   address: string;
   coordinates: { lon: number | null; lat: number | null };
   source: "geoapify";
@@ -48,12 +59,81 @@ type Activity = {
 
 const router = Router();
 
+const majorCapitalCities = [
+  "Washington, DC, USA",
+  "London, UK",
+  "Paris, France",
+  "Berlin, Germany",
+  "Rome, Italy",
+  "Madrid, Spain",
+  "Lisbon, Portugal",
+  "Dublin, Ireland",
+  "Amsterdam, Netherlands",
+  "Brussels, Belgium",
+  "Vienna, Austria",
+  "Prague, Czechia",
+  "Warsaw, Poland",
+  "Athens, Greece",
+  "Budapest, Hungary",
+  "Copenhagen, Denmark",
+  "Stockholm, Sweden",
+  "Oslo, Norway",
+  "Helsinki, Finland",
+  "Reykjavik, Iceland",
+  "Bern, Switzerland",
+  "Ottawa, Canada",
+  "Mexico City, Mexico",
+  "Brasilia, Brazil",
+  "Buenos Aires, Argentina",
+  "Santiago, Chile",
+  "Lima, Peru",
+  "Bogota, Colombia",
+  "Quito, Ecuador",
+  "Tokyo, Japan",
+  "Seoul, South Korea",
+  "Beijing, China",
+  "Bangkok, Thailand",
+  "Hanoi, Vietnam",
+  "Kuala Lumpur, Malaysia",
+  "Singapore, Singapore",
+  "Jakarta, Indonesia",
+  "Manila, Philippines",
+  "Canberra, Australia",
+  "Wellington, New Zealand",
+  "New Delhi, India",
+  "Islamabad, Pakistan",
+  "Ankara, Turkey",
+  "Jerusalem, Israel",
+  "Abu Dhabi, UAE",
+  "Riyadh, Saudi Arabia",
+  "Cairo, Egypt",
+  "Nairobi, Kenya",
+  "Pretoria, South Africa",
+  "Moscow, Russia",
+];
+
+const normalizeCityForComparison = (value: string) =>
+  value.toLowerCase().replace(/\./g, "").replace(/\s+/g, " ").trim();
+
+const majorCapitalSet = new Set(
+  majorCapitalCities.flatMap((city) => {
+    const parts = city.split(",").map((part) => part.trim());
+    const cityCountry = normalizeCityForComparison(parts.slice(0, 2).join(","));
+    const cityOnly = normalizeCityForComparison(parts[0]);
+    return [cityCountry, cityOnly];
+  })
+);
+
 const interestCategoryMap: Record<InterestKey, string[]> = {
   food: ["catering.restaurant", "catering.cafe"],
   museums: ["entertainment.museum"],
   outdoors: ["leisure.park", "natural"],
-  shopping: ["commercial.shopping_mall", "commercial.marketplace"],
-  nightlife: ["entertainment", "catering.bar"],
+  shopping: ["commercial.shopping_mall", "commercial.marketplace", "commercial.supermarket"],
+  nightlife: [
+    "catering.bar",
+    "catering.pub",
+    "catering.biergarten",
+  ],
   landmarks: ["tourism.sights", "heritage"],
 };
 
@@ -87,6 +167,9 @@ const getGeoapifyCategories = (interests: InterestKey[]): string => {
   return Array.from(categories).join(",");
 };
 
+const normalizeCategory = (value: string) =>
+  value.trim().toLowerCase().replace(/\//g, ".").replace(/\s+/g, "");
+
 const estimateDurationMinutes = (category: string) => {
   if (category.includes("museum")) return 120;
   if (category.includes("park") || category.includes("natural")) return 90;
@@ -114,8 +197,8 @@ const normalizeActivity = (feature: GeoapifyFeature, index: number): Activity | 
   const rawCategories = Array.isArray(props.categories)
     ? props.categories.filter((c): c is string => typeof c === "string")
     : [];
-
-  const category = rawCategories[0] || "general";
+  const categories = rawCategories.map(normalizeCategory);
+  const category = categories[0] || "general";
   const lon =
     typeof props.lon === "number"
       ? props.lon
@@ -137,6 +220,7 @@ const normalizeActivity = (feature: GeoapifyFeature, index: number): Activity | 
     id: placeId,
     name: rawName,
     category,
+    categories,
     address,
     coordinates: { lon, lat },
     source: "geoapify",
@@ -155,14 +239,32 @@ const dedupeActivities = (activities: Activity[]) => {
 };
 
 const scoreActivity = (activity: Activity, interests: InterestKey[]) => {
+  const activityCategories =
+    activity.categories.length > 0 ? activity.categories : [normalizeCategory(activity.category)];
   let score = 0;
   interests.forEach((interest) => {
-    const categories = interestCategoryMap[interest];
-    if (categories.some((category) => activity.category.includes(category.split(".")[0]))) {
+    const categories = interestCategoryMap[interest].map(normalizeCategory);
+    if (
+      categories.some((requestedCategory) =>
+        activityCategories.some(
+          (activityCategory) =>
+            activityCategory === requestedCategory ||
+            activityCategory.startsWith(`${requestedCategory}.`) ||
+            requestedCategory.startsWith(`${activityCategory}.`)
+        )
+      )
+    ) {
+      score += 5;
+    } else if (
+      categories.some((requestedCategory) =>
+        activityCategories.some((activityCategory) => {
+          const requestedRoot = requestedCategory.split(".")[0];
+          const activityRoot = activityCategory.split(".")[0];
+          return requestedRoot === activityRoot;
+        })
+      )
+    ) {
       score += 2;
-    }
-    if (categories.some((category) => activity.category.includes(category))) {
-      score += 3;
     }
   });
 
@@ -209,6 +311,10 @@ const buildItinerary = (
   };
 };
 
+router.get("/capital-cities", (_req, res) => {
+  return res.json({ cities: majorCapitalCities });
+});
+
 router.post("/generate", async (req, res) => {
   const body = req.body as GenerateItineraryBody;
   const apiKey = process.env.GEOAPIFY_API_KEY;
@@ -221,9 +327,21 @@ router.post("/generate", async (req, res) => {
 
   const destinationCity =
     typeof body.destinationCity === "string" ? body.destinationCity.trim() : "";
+  const cityScope = body.cityScope === "major-capitals" ? "major-capitals" : "all";
 
   if (!destinationCity) {
     return res.status(400).json({ error: "destinationCity is required." });
+  }
+
+  if (cityScope === "major-capitals") {
+    const cityQuery = normalizeCityForComparison(destinationCity);
+    const cityToken = cityQuery.split(",").slice(0, 2).join(",").trim();
+    if (!majorCapitalSet.has(cityToken) && !majorCapitalSet.has(cityQuery)) {
+      return res.status(400).json({
+        error:
+          "This city is outside the current major-capitals list. Switch scope to 'Any city' or choose a listed capital.",
+      });
+    }
   }
 
   const days = toPositiveInt(body.days, 2, 1, 14);
@@ -243,6 +361,7 @@ router.post("/generate", async (req, res) => {
     geocodeUrl.searchParams.set("text", destinationCity);
     geocodeUrl.searchParams.set("limit", "1");
     geocodeUrl.searchParams.set("format", "json");
+    geocodeUrl.searchParams.set("type", "city");
     geocodeUrl.searchParams.set("apiKey", apiKey);
 
     const geocodeResponse = await fetch(geocodeUrl.toString());
@@ -303,8 +422,14 @@ router.post("/generate", async (req, res) => {
     };
 
     if (!placesResponse.ok) {
+      const detailsMessage =
+        typeof (placesData as { message?: unknown }).message === "string"
+          ? (placesData as { message: string }).message
+          : null;
       return res.status(placesResponse.status).json({
-        error: "Geoapify places lookup failed.",
+        error: detailsMessage
+          ? `Geoapify places lookup failed: ${detailsMessage}`
+          : "Geoapify places lookup failed.",
         details: placesData,
       });
     }
@@ -444,6 +569,70 @@ router.get("/saved/:id", async (req, res) => {
   } catch (error) {
     console.error("Load saved itinerary error:", error);
     return res.status(500).json({ error: "Failed to load itinerary." });
+  }
+});
+
+router.put("/saved/:id", async (req, res) => {
+  const { id } = req.params;
+  const body = req.body as UpdateItineraryBody;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid itinerary id." });
+  }
+
+  const updates: Record<string, unknown> = {};
+
+  if (typeof body.title === "string") updates.title = body.title.trim();
+  if (typeof body.tripInput === "object" && body.tripInput !== null) updates.tripInput = body.tripInput;
+  if (Array.isArray(body.itineraryDays)) updates.itineraryDays = body.itineraryDays;
+  if (typeof body.metadata === "object" && body.metadata !== null) updates.metadata = body.metadata;
+  if (Array.isArray(body.notes)) {
+    updates.notes = body.notes.filter((note): note is string => typeof note === "string");
+  }
+  if (Array.isArray(body.unassignedActivities)) updates.unassignedActivities = body.unassignedActivities;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: "No valid fields provided for update." });
+  }
+
+  try {
+    const updatedTrip = await Trip.findByIdAndUpdate(id, updates, {
+      new: true,
+      runValidators: true,
+    }).lean();
+
+    if (!updatedTrip) {
+      return res.status(404).json({ error: "Itinerary not found." });
+    }
+
+    return res.json({
+      message: "Itinerary updated.",
+      updatedTrip,
+    });
+  } catch (error) {
+    console.error("Update saved itinerary error:", error);
+    return res.status(500).json({ error: "Failed to update itinerary." });
+  }
+});
+
+router.delete("/saved/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid itinerary id." });
+  }
+
+  try {
+    const deletedTrip = await Trip.findByIdAndDelete(id).lean();
+
+    if (!deletedTrip) {
+      return res.status(404).json({ error: "Itinerary not found." });
+    }
+
+    return res.json({ message: "Itinerary deleted.", deletedTripId: id });
+  } catch (error) {
+    console.error("Delete saved itinerary error:", error);
+    return res.status(500).json({ error: "Failed to delete itinerary." });
   }
 });
 

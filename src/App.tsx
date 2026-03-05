@@ -14,7 +14,7 @@ type ItineraryActivity = {
   name: string;
   category: string;
   address: string;
-  suggestedTimeSlot: string;
+  suggestedTimeSlot?: string;
   estimatedDurationMinutes: number;
 };
 
@@ -46,7 +46,7 @@ type GenerateResponse = {
     geoFilter: string;
   };
   notes?: string[];
-  unassignedActivities?: unknown[];
+  unassignedActivities?: ItineraryActivity[];
   error?: string;
 };
 
@@ -83,11 +83,19 @@ function App() {
   ]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingTripId, setDeletingTripId] = useState<string | null>(null);
   const [loadingSavedTrips, setLoadingSavedTrips] = useState(false);
   const [error, setError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [savedTrips, setSavedTrips] = useState<SavedTripSummary[]>([]);
+  const [selectedUnassignedByDay, setSelectedUnassignedByDay] = useState<Record<number, string>>(
+    {}
+  );
+
+  const timeSlots = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"];
+
+  const slotForIndex = (index: number) => timeSlots[Math.min(index, timeSlots.length - 1)];
 
   const toggleInterest = (interest: Interest) => {
     setSelectedInterests((current) => {
@@ -188,8 +196,13 @@ function App() {
     setSaveMessage("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/itinerary/save`, {
-        method: "POST",
+      const isUpdate = Boolean(result._id);
+      const endpoint = isUpdate
+        ? `${API_BASE_URL}/api/itinerary/saved/${result._id}`
+        : `${API_BASE_URL}/api/itinerary/save`;
+
+      const response = await fetch(endpoint, {
+        method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: `${result.tripInput.destinationCity} (${result.tripInput.days} day trip)`,
@@ -205,6 +218,7 @@ function App() {
         error?: string;
         message?: string;
         savedTrip?: GenerateResponse;
+        updatedTrip?: GenerateResponse;
       };
 
       if (!response.ok) {
@@ -214,6 +228,9 @@ function App() {
       if (data.savedTrip) {
         setResult(data.savedTrip);
       }
+      if (data.updatedTrip) {
+        setResult(data.updatedTrip);
+      }
       setSaveMessage(data.message || "Itinerary saved.");
       await loadSavedTrips();
     } catch (err) {
@@ -222,6 +239,92 @@ function App() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const deleteSavedTrip = async (tripId: string) => {
+    setDeletingTripId(tripId);
+    setError("");
+    setSaveMessage("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/itinerary/saved/${tripId}`, {
+        method: "DELETE",
+      });
+
+      const data = (await response.json()) as { error?: string; message?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to delete itinerary.");
+      }
+
+      if (result?._id === tripId) {
+        setResult(null);
+      }
+
+      setSaveMessage(data.message || "Itinerary deleted.");
+      await loadSavedTrips();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete itinerary";
+      setError(message);
+    } finally {
+      setDeletingTripId(null);
+    }
+  };
+
+  const removeActivityFromDay = (dayNumber: number, activityId: string) => {
+    setResult((current) => {
+      if (!current) return current;
+
+      let removed: ItineraryActivity | null = null;
+      const nextDays = current.itineraryDays.map((day) => {
+        if (day.dayNumber !== dayNumber) return day;
+
+        const remaining = day.activities
+          .filter((activity) => {
+            if (activity.id === activityId) {
+              removed = activity;
+              return false;
+            }
+            return true;
+          })
+          .map((activity, idx) => ({ ...activity, suggestedTimeSlot: slotForIndex(idx) }));
+
+        return { ...day, activities: remaining };
+      });
+
+      if (!removed) return current;
+
+      const removedActivity: ItineraryActivity = removed;
+      const unassigned = [
+        ...(current.unassignedActivities || []),
+        { ...removedActivity, suggestedTimeSlot: "" },
+      ];
+      return { ...current, itineraryDays: nextDays, unassignedActivities: unassigned };
+    });
+  };
+
+  const addUnassignedToDay = (dayNumber: number) => {
+    const chosenId = selectedUnassignedByDay[dayNumber];
+    if (!chosenId) return;
+
+    setResult((current) => {
+      if (!current) return current;
+
+      const unassigned = current.unassignedActivities || [];
+      const chosen = unassigned.find((activity) => activity.id === chosenId);
+      if (!chosen) return current;
+
+      const nextUnassigned = unassigned.filter((activity) => activity.id !== chosenId);
+      const nextDays = current.itineraryDays.map((day) => {
+        if (day.dayNumber !== dayNumber) return day;
+        const nextActivities = [...day.activities, { ...chosen, suggestedTimeSlot: slotForIndex(day.activities.length) }];
+        return { ...day, activities: nextActivities };
+      });
+
+      return { ...current, itineraryDays: nextDays, unassignedActivities: nextUnassigned };
+    });
+
+    setSelectedUnassignedByDay((current) => ({ ...current, [dayNumber]: "" }));
   };
 
   useEffect(() => {
@@ -336,22 +439,33 @@ function App() {
 
               <div className="list-group">
                 {savedTrips.map((trip) => (
-                  <button
-                    key={trip._id}
-                    type="button"
-                    className="list-group-item list-group-item-action"
-                    onClick={() => void loadSavedTrip(trip._id)}
-                  >
-                    <div className="fw-semibold">
-                      {trip.title || trip.tripInput.destinationCity}
+                  <div key={trip._id} className="list-group-item">
+                    <div className="d-flex justify-content-between align-items-start gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-link text-start p-0 text-decoration-none flex-grow-1"
+                        onClick={() => void loadSavedTrip(trip._id)}
+                      >
+                        <div className="fw-semibold text-body">
+                          {trip.title || trip.tripInput.destinationCity}
+                        </div>
+                        <div className="small text-muted">
+                          {trip.tripInput.destinationCity} • {trip.tripInput.days} day(s)
+                        </div>
+                        <div className="small text-muted">
+                          {new Date(trip.updatedAt).toLocaleString()}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-danger"
+                        onClick={() => void deleteSavedTrip(trip._id)}
+                        disabled={deletingTripId === trip._id}
+                      >
+                        {deletingTripId === trip._id ? "Deleting..." : "Delete"}
+                      </button>
                     </div>
-                    <div className="small text-muted">
-                      {trip.tripInput.destinationCity} • {trip.tripInput.days} day(s)
-                    </div>
-                    <div className="small text-muted">
-                      {new Date(trip.updatedAt).toLocaleString()}
-                    </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -411,6 +525,36 @@ function App() {
                     <div key={day.dayNumber} className="border rounded p-3">
                       <h3 className="h5 mb-3">Day {day.dayNumber}</h3>
 
+                      {(result.unassignedActivities || []).length > 0 && (
+                        <div className="d-flex gap-2 mb-3">
+                          <select
+                            className="form-select form-select-sm"
+                            value={selectedUnassignedByDay[day.dayNumber] || ""}
+                            onChange={(e) =>
+                              setSelectedUnassignedByDay((current) => ({
+                                ...current,
+                                [day.dayNumber]: e.target.value,
+                              }))
+                            }
+                          >
+                            <option value="">Add activity from unassigned...</option>
+                            {(result.unassignedActivities || []).map((activity) => (
+                              <option key={activity.id} value={activity.id}>
+                                {activity.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-primary"
+                            onClick={() => addUnassignedToDay(day.dayNumber)}
+                            disabled={!selectedUnassignedByDay[day.dayNumber]}
+                          >
+                            Add
+                          </button>
+                        </div>
+                      )}
+
                       {day.activities.length === 0 ? (
                         <div className="text-muted">No activities assigned.</div>
                       ) : (
@@ -429,9 +573,16 @@ function App() {
                                 </div>
                                 <div className="text-end small">
                                   <div className="badge text-bg-light border mb-1">
-                                    {activity.suggestedTimeSlot}
+                                    {activity.suggestedTimeSlot || "Flexible"}
                                   </div>
                                   <div>{activity.estimatedDurationMinutes} min</div>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-outline-danger mt-2"
+                                    onClick={() => removeActivityFromDay(day.dayNumber, activity.id)}
+                                  >
+                                    Remove
+                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -440,6 +591,7 @@ function App() {
                       )}
                     </div>
                   ))}
+
                 </div>
               )}
             </div>
