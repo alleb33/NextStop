@@ -30,6 +30,7 @@ const tripInputSchema = new Schema(
     destinationCity: { type: String, required: true, trim: true },
     days: { type: Number, required: true, min: 1, max: 14 },
     interests: { type: [String], default: [] },
+    selectedAttractions: { type: [String], default: [] },
     constraints: {
       maxActivitiesPerDay: { type: Number, default: 3 },
       blockedWindows: { type: [String], default: [] },

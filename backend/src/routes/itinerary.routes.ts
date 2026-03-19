@@ -1,6 +1,7 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import Trip from "../models/trip.model";
+import { getCityAttractions } from "../data/cityAttractions";
 
 type InterestKey =
   | "food"
@@ -15,6 +16,7 @@ type GenerateItineraryBody = {
   cityScope?: unknown;
   days?: unknown;
   interests?: unknown;
+  selectedAttractions?: unknown;
   constraints?: {
     maxActivitiesPerDay?: unknown;
     blockedWindows?: unknown;
@@ -53,7 +55,7 @@ type Activity = {
   categories: string[];
   address: string;
   coordinates: { lon: number | null; lat: number | null };
-  source: "geoapify";
+  source: "geoapify" | "curated";
   estimatedDurationMinutes: number;
 };
 
@@ -158,6 +160,19 @@ const normalizeInterests = (value: unknown): InterestKey[] => {
   return valid.length > 0 ? Array.from(new Set(valid)) : defaultInterests;
 };
 
+const normalizeSelectedAttractions = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+
+  return Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  );
+};
+
 const getGeoapifyCategories = (interests: InterestKey[]): string => {
   const categories = new Set<string>();
   interests.forEach((interest) => {
@@ -169,6 +184,9 @@ const getGeoapifyCategories = (interests: InterestKey[]): string => {
 
 const normalizeCategory = (value: string) =>
   value.trim().toLowerCase().replace(/\//g, ".").replace(/\s+/g, "");
+
+const normalizeName = (value: string) =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const estimateDurationMinutes = (category: string) => {
   if (category.includes("museum")) return 120;
@@ -272,16 +290,70 @@ const scoreActivity = (activity: Activity, interests: InterestKey[]) => {
   return score;
 };
 
+const findBestAttractionMatch = (
+  requestedName: string,
+  activities: Activity[],
+  usedIds: Set<string>
+) => {
+  const requested = normalizeName(requestedName);
+  const requestedTokens = requested.split(" ").filter(Boolean);
+
+  let bestActivity: Activity | null = null;
+  let bestScore = -1;
+
+  activities.forEach((activity) => {
+    if (usedIds.has(activity.id)) return;
+
+    const candidate = normalizeName(activity.name);
+    let score = 0;
+
+    if (candidate === requested) {
+      score = 100;
+    } else if (candidate.includes(requested) || requested.includes(candidate)) {
+      score = 80;
+    } else {
+      const tokenMatches = requestedTokens.filter((token) => candidate.includes(token)).length;
+      score = tokenMatches * 10;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestActivity = activity;
+    }
+  });
+
+  if (!bestActivity || bestScore < 20) {
+    return null;
+  }
+
+  return bestActivity;
+};
+
+const createCuratedActivity = (name: string, destinationCity: string): Activity => ({
+  id: `curated-${normalizeName(destinationCity)}-${normalizeName(name)}`,
+  name,
+  category: "must-see attraction",
+  categories: ["tourism.sights"],
+  address: destinationCity,
+  coordinates: { lon: null, lat: null },
+  source: "curated",
+  estimatedDurationMinutes: 90,
+});
+
 const buildItinerary = (
   activities: Activity[],
   days: number,
   maxActivitiesPerDay: number,
-  interests: InterestKey[]
+  interests: InterestKey[],
+  pinnedActivities: Activity[] = []
 ) => {
+  const pinnedIds = new Set(pinnedActivities.map((activity) => activity.id));
   const ranked = activities
+    .filter((activity) => !pinnedIds.has(activity.id))
     .map((activity) => ({ activity, score: scoreActivity(activity, interests) }))
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.activity);
+  const orderedActivities = [...pinnedActivities, ...ranked];
 
   const itineraryDays = Array.from({ length: days }, (_, index) => ({
     dayNumber: index + 1,
@@ -294,11 +366,11 @@ const buildItinerary = (
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     while (
       itineraryDays[dayIndex].activities.length < maxActivitiesPerDay &&
-      pointer < ranked.length
+      pointer < orderedActivities.length
     ) {
       const slotIndex = itineraryDays[dayIndex].activities.length;
       itineraryDays[dayIndex].activities.push({
-        ...ranked[pointer],
+        ...orderedActivities[pointer],
         suggestedTimeSlot: timeSlots[Math.min(slotIndex, timeSlots.length - 1)],
       });
       pointer += 1;
@@ -307,12 +379,21 @@ const buildItinerary = (
 
   return {
     itineraryDays,
-    unassignedActivities: ranked.slice(pointer),
+    unassignedActivities: orderedActivities.slice(pointer),
   };
 };
 
 router.get("/capital-cities", (_req, res) => {
   return res.json({ cities: majorCapitalCities });
+});
+
+router.get("/city-attractions", (req, res) => {
+  const city = typeof req.query.city === "string" ? req.query.city.trim() : "";
+  if (!city) {
+    return res.json({ attractions: [] });
+  }
+
+  return res.json({ attractions: getCityAttractions(city) });
 });
 
 router.post("/generate", async (req, res) => {
@@ -346,6 +427,7 @@ router.post("/generate", async (req, res) => {
 
   const days = toPositiveInt(body.days, 2, 1, 14);
   const interests = normalizeInterests(body.interests);
+  const selectedAttractions = normalizeSelectedAttractions(body.selectedAttractions);
   const maxActivitiesPerDay = toPositiveInt(
     body.constraints?.maxActivitiesPerDay,
     3,
@@ -437,15 +519,48 @@ router.post("/generate", async (req, res) => {
     const normalized = (placesData.features ?? [])
       .map(normalizeActivity)
       .filter((activity): activity is Activity => activity !== null);
+    const mustSeeLookup: Activity[] = [];
+    if (selectedAttractions.length > 0) {
+      const attractionUrl = new URL("https://api.geoapify.com/v2/places");
+      attractionUrl.searchParams.set(
+        "categories",
+        "tourism.sights,heritage,entertainment.museum"
+      );
+      attractionUrl.searchParams.set("filter", filter);
+      attractionUrl.searchParams.set("limit", "80");
+      attractionUrl.searchParams.set("apiKey", apiKey);
 
-    const uniqueActivities = dedupeActivities(normalized);
+      const attractionResponse = await fetch(attractionUrl.toString());
+      const attractionData = (await attractionResponse.json()) as {
+        features?: GeoapifyFeature[];
+      };
 
-    if (uniqueActivities.length === 0) {
+      if (attractionResponse.ok) {
+        mustSeeLookup.push(
+          ...(attractionData.features ?? [])
+            .map(normalizeActivity)
+            .filter((activity): activity is Activity => activity !== null)
+        );
+      }
+    }
+
+    const uniqueActivities = dedupeActivities([...normalized, ...mustSeeLookup]);
+    const usedPinnedIds = new Set<string>();
+    const pinnedActivities = selectedAttractions.map((attractionName) => {
+      const matched =
+        findBestAttractionMatch(attractionName, uniqueActivities, usedPinnedIds) ||
+        createCuratedActivity(attractionName, destinationCity);
+      usedPinnedIds.add(matched.id);
+      return matched;
+    });
+
+    if (uniqueActivities.length === 0 && pinnedActivities.length === 0) {
       return res.status(200).json({
         tripInput: {
           destinationCity,
           days,
           interests,
+          selectedAttractions,
           constraints: { maxActivitiesPerDay, blockedWindows },
         },
         itineraryDays: Array.from({ length: days }, (_, index) => ({
@@ -460,10 +575,11 @@ router.post("/generate", async (req, res) => {
     }
 
     const { itineraryDays, unassignedActivities } = buildItinerary(
-      uniqueActivities,
+      uniqueActivities.length > 0 ? uniqueActivities : pinnedActivities,
       days,
       maxActivitiesPerDay,
-      interests
+      interests,
+      pinnedActivities
     );
 
     return res.json({
@@ -471,6 +587,7 @@ router.post("/generate", async (req, res) => {
         destinationCity,
         days,
         interests,
+        selectedAttractions,
         constraints: { maxActivitiesPerDay, blockedWindows },
       },
       itineraryDays,
@@ -478,11 +595,15 @@ router.post("/generate", async (req, res) => {
         provider: "Geoapify",
         fetchedPlaces: normalized.length,
         uniquePlaces: uniqueActivities.length,
+        pinnedAttractions: pinnedActivities.length,
         categoryQuery: categories,
         geoFilter: filter,
       },
       notes: [
         "Time slots are heuristic placeholders (not route-optimized yet).",
+        selectedAttractions.length > 0
+          ? "Selected attractions are placed into the itinerary before other category picks."
+          : "Pick must-see attractions on supported cities to lock them into the plan first.",
         blockedWindows.length > 0
           ? "Blocked windows are stored, but strict time conflict enforcement is a later step."
           : "Add blocked windows later to improve scheduling realism.",
