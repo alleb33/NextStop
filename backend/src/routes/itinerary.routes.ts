@@ -59,6 +59,12 @@ type Activity = {
   estimatedDurationMinutes: number;
 };
 
+type BlockedWindow = {
+  day: number;
+  timeSlot: string;
+  label?: string;
+};
+
 const router = Router();
 
 const majorCapitalCities = [
@@ -340,12 +346,151 @@ const createCuratedActivity = (name: string, destinationCity: string): Activity 
   estimatedDurationMinutes: 90,
 });
 
+const TIME_SLOTS = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"] as const;
+
+/** Returns preferred time slots for a category, from most to least preferred. */
+const getCategoryTimePreference = (category: string): string[] => {
+  const cat = category.toLowerCase();
+  if (
+    cat.includes("bar") ||
+    cat.includes("pub") ||
+    cat.includes("biergarten") ||
+    cat.includes("nightclub") ||
+    cat.includes("nightlife")
+  ) {
+    return ["Night", "Evening"];
+  }
+  if (cat.includes("cafe")) {
+    return ["Morning", "Late Morning", "Afternoon"];
+  }
+  if (cat.includes("restaurant")) {
+    // Spread restaurants across meal times
+    return ["Afternoon", "Evening", "Morning"];
+  }
+  if (cat.includes("park") || cat.includes("natural")) {
+    return ["Morning", "Late Morning"];
+  }
+  if (cat.includes("museum")) {
+    return ["Afternoon", "Late Morning"];
+  }
+  if (
+    cat.includes("shopping") ||
+    cat.includes("mall") ||
+    cat.includes("marketplace") ||
+    cat.includes("supermarket")
+  ) {
+    return ["Late Morning", "Afternoon"];
+  }
+  if (cat.includes("sights") || cat.includes("heritage") || cat.includes("tourism")) {
+    return ["Morning", "Late Morning", "Afternoon"];
+  }
+  return [...TIME_SLOTS];
+};
+
+/**
+ * Interleaves activities from different interest categories so each day gets
+ * a variety of category types rather than all food or all landmarks clumped.
+ */
+const interleaveByCategory = (activities: Activity[], interests: InterestKey[]): Activity[] => {
+  const groups: Record<string, Activity[]> = {};
+  [...interests, "other"].forEach((key) => {
+    groups[key] = [];
+  });
+
+  activities.forEach((activity) => {
+    let placed = false;
+    for (const interest of interests) {
+      const cats = interestCategoryMap[interest].map(normalizeCategory);
+      const actCats =
+        activity.categories.length > 0
+          ? activity.categories
+          : [normalizeCategory(activity.category)];
+      if (
+        cats.some((c) =>
+          actCats.some(
+            (ac) => ac === c || ac.startsWith(`${c}.`) || c.startsWith(`${ac}.`)
+          )
+        )
+      ) {
+        groups[interest].push(activity);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) groups["other"].push(activity);
+  });
+
+  // Round-robin across category groups: food[0], landmark[0], museum[0], food[1], ...
+  const result: Activity[] = [];
+  const allKeys = [...interests, "other"];
+  const maxLen = Math.max(...allKeys.map((k) => groups[k].length), 0);
+  for (let i = 0; i < maxLen; i++) {
+    for (const key of allKeys) {
+      if (i < groups[key].length) result.push(groups[key][i]);
+    }
+  }
+  return result;
+};
+
+/**
+ * Assigns time slots to a day's activities based on category preferences.
+ * Nightlife → Night/Evening, parks → Morning, restaurants → spread across meals, etc.
+ */
+const assignTimeSlotsForDay = (
+  activities: Activity[],
+  availableSlots: string[]
+): Array<Activity & { suggestedTimeSlot: string }> => {
+  if (activities.length === 0) return [];
+
+  // Sort activities by their earliest preferred slot so night activities end up last
+  const withPrefs = activities.map((activity) => ({
+    activity,
+    prefs: getCategoryTimePreference(activity.category),
+  }));
+  withPrefs.sort((a, b) => {
+    const earliest = (prefs: string[]) =>
+      prefs.reduce((min, slot) => {
+        const idx = TIME_SLOTS.indexOf(slot as (typeof TIME_SLOTS)[number]);
+        return idx >= 0 ? Math.min(min, idx) : min;
+      }, 99);
+    return earliest(a.prefs) - earliest(b.prefs);
+  });
+
+  // Greedily assign slots based on preference, then fall back to any free slot
+  const usedSlots = new Set<string>();
+  const assigned: Array<Activity & { suggestedTimeSlot: string }> = [];
+  withPrefs.forEach(({ activity, prefs }) => {
+    let chosenSlot: string | undefined;
+    for (const pref of prefs) {
+      if (availableSlots.includes(pref) && !usedSlots.has(pref)) {
+        chosenSlot = pref;
+        break;
+      }
+    }
+    if (!chosenSlot) {
+      chosenSlot = TIME_SLOTS.find((s) => availableSlots.includes(s) && !usedSlots.has(s));
+    }
+    if (chosenSlot) {
+      usedSlots.add(chosenSlot);
+      assigned.push({ ...activity, suggestedTimeSlot: chosenSlot });
+    }
+  });
+
+  // Return sorted in chronological time-slot order
+  return assigned.sort(
+    (a, b) =>
+      TIME_SLOTS.indexOf(a.suggestedTimeSlot as (typeof TIME_SLOTS)[number]) -
+      TIME_SLOTS.indexOf(b.suggestedTimeSlot as (typeof TIME_SLOTS)[number])
+  );
+};
+
 const buildItinerary = (
   activities: Activity[],
   days: number,
   maxActivitiesPerDay: number,
   interests: InterestKey[],
-  pinnedActivities: Activity[] = []
+  pinnedActivities: Activity[] = [],
+  blockedWindows: BlockedWindow[] = []
 ) => {
   const pinnedIds = new Set(pinnedActivities.map((activity) => activity.id));
   const ranked = activities
@@ -353,7 +498,10 @@ const buildItinerary = (
     .map((activity) => ({ activity, score: scoreActivity(activity, interests) }))
     .sort((a, b) => b.score - a.score)
     .map((entry) => entry.activity);
-  const orderedActivities = [...pinnedActivities, ...ranked];
+
+  // Interleave ranked activities so categories are spread evenly across days
+  const interleaved = interleaveByCategory(ranked, interests);
+  const orderedActivities = [...pinnedActivities, ...interleaved];
 
   const itineraryDays = Array.from({ length: days }, (_, index) => ({
     dayNumber: index + 1,
@@ -361,20 +509,22 @@ const buildItinerary = (
   }));
 
   let pointer = 0;
-  const timeSlots = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"];
 
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
-    while (
-      itineraryDays[dayIndex].activities.length < maxActivitiesPerDay &&
-      pointer < orderedActivities.length
-    ) {
-      const slotIndex = itineraryDays[dayIndex].activities.length;
-      itineraryDays[dayIndex].activities.push({
-        ...orderedActivities[pointer],
-        suggestedTimeSlot: timeSlots[Math.min(slotIndex, timeSlots.length - 1)],
-      });
-      pointer += 1;
-    }
+    const dayNumber = dayIndex + 1;
+
+    // Determine which time slots are available (not blocked by user constraints)
+    const blockedSlots = new Set(
+      blockedWindows.filter((bw) => bw.day === dayNumber).map((bw) => bw.timeSlot)
+    );
+    const availableSlots = [...TIME_SLOTS].filter((slot) => !blockedSlots.has(slot));
+    const slotsToFill = Math.min(maxActivitiesPerDay, availableSlots.length);
+
+    const dayActivities = orderedActivities.slice(pointer, pointer + slotsToFill);
+    pointer += slotsToFill;
+
+    // Assign time slots with category-awareness (nightlife → night, parks → morning, etc.)
+    itineraryDays[dayIndex].activities = assignTimeSlotsForDay(dayActivities, availableSlots);
   }
 
   return {
@@ -434,8 +584,20 @@ router.post("/generate", async (req, res) => {
     1,
     6
   );
-  const blockedWindows = Array.isArray(body.constraints?.blockedWindows)
-    ? body.constraints?.blockedWindows
+  const blockedWindows: BlockedWindow[] = Array.isArray(body.constraints?.blockedWindows)
+    ? (body.constraints.blockedWindows as unknown[])
+        .filter(
+          (bw): bw is Record<string, unknown> =>
+            typeof bw === "object" && bw !== null
+        )
+        .map((bw) => ({
+          day: typeof bw.day === "number" ? Math.floor(bw.day) : 0,
+          timeSlot: typeof bw.timeSlot === "string" ? bw.timeSlot.trim() : "",
+          label: typeof bw.label === "string" ? bw.label.trim() : undefined,
+        }))
+        .filter(
+          (bw) => bw.day >= 1 && bw.day <= days && TIME_SLOTS.includes(bw.timeSlot as never)
+        )
     : [];
 
   try {
@@ -579,7 +741,8 @@ router.post("/generate", async (req, res) => {
       days,
       maxActivitiesPerDay,
       interests,
-      pinnedActivities
+      pinnedActivities,
+      blockedWindows
     );
 
     return res.json({
@@ -600,13 +763,14 @@ router.post("/generate", async (req, res) => {
         geoFilter: filter,
       },
       notes: [
-        "Time slots are heuristic placeholders (not route-optimized yet).",
+        "Activities are spread across categories each day — food, landmarks, museums, etc. are distributed evenly.",
+        "Time slots are category-aware: nightlife → evening/night, parks → morning, restaurants → meal times.",
         selectedAttractions.length > 0
           ? "Selected attractions are placed into the itinerary before other category picks."
           : "Pick must-see attractions on supported cities to lock them into the plan first.",
         blockedWindows.length > 0
-          ? "Blocked windows are stored, but strict time conflict enforcement is a later step."
-          : "Add blocked windows later to improve scheduling realism.",
+          ? `Blocked windows enforced: ${blockedWindows.map((bw) => `Day ${bw.day} ${bw.timeSlot}${bw.label ? ` (${bw.label})` : ""}`).join(", ")}.`
+          : "Add blocked windows to skip time slots reserved for conferences, meetings, or rest.",
       ],
       unassignedActivities: unassignedActivities.slice(0, 15),
     });

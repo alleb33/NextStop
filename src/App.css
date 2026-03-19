@@ -481,6 +481,124 @@
   padding: 3rem 1.5rem;
 }
 
+/* Interest dropdown */
+.interest-dropdown {
+  position: relative;
+}
+
+.interest-dropdown__trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.interest-dropdown__arrow {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.interest-dropdown__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  border: 1px solid rgba(38, 63, 55, 0.14);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 16px 40px rgba(20, 37, 32, 0.14);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.interest-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(38, 63, 55, 0.07);
+  transition: background 150ms ease;
+}
+
+.interest-checkbox-item:last-child {
+  border-bottom: none;
+}
+
+.interest-checkbox-item:hover {
+  background: rgba(27, 127, 104, 0.06);
+}
+
+.interest-checkbox-item input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.interest-checkbox-item__content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.interest-checkbox-item__label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.interest-checkbox-item__desc {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+/* Blocked windows */
+.blocked-window-form {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.blocked-window-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.blocked-window-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(38, 63, 55, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.blocked-window-item .danger-button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+@media (min-width: 520px) {
+  .blocked-window-form {
+    grid-template-columns: auto auto 1fr auto;
+    align-items: center;
+  }
+
+  .blocked-window-form .field__input {
+    width: auto;
+  }
+}
+
 @media (min-width: 992px) {
   .app-layout {
     grid-template-columns: 320px minmax(0, 1fr);

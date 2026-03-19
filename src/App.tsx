@@ -38,7 +38,7 @@ type GenerateResponse = {
     selectedAttractions?: string[];
     constraints: {
       maxActivitiesPerDay: number;
-      blockedWindows: string[];
+      blockedWindows: BlockedWindow[];
     };
   };
   itineraryDays: ItineraryDay[];
@@ -64,6 +64,12 @@ type SavedTripSummary = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+type BlockedWindow = {
+  day: number;
+  timeSlot: string;
+  label: string;
 };
 
 type NavItem = {
@@ -124,6 +130,7 @@ function App() {
   const [saveMessage, setSaveMessage] = useState("");
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [savedTrips, setSavedTrips] = useState<SavedTripSummary[]>([]);
+  const [blockedWindows, setBlockedWindows] = useState<BlockedWindow[]>([]);
   const [selectedUnassignedByDay, setSelectedUnassignedByDay] = useState<Record<number, string>>(
     {}
   );
@@ -146,6 +153,33 @@ function App() {
       ["landmarks", "food", "museums", "outdoors", "shopping", "nightlife"].includes(interest)
     );
     setSelectedInterests(validInterests.length > 0 ? validInterests : ["landmarks", "food"]);
+    const savedWindows = trip.tripInput.constraints.blockedWindows;
+    if (Array.isArray(savedWindows)) {
+      setBlockedWindows(
+        savedWindows.filter(
+          (bw): bw is BlockedWindow =>
+            typeof bw === "object" &&
+            bw !== null &&
+            typeof (bw as BlockedWindow).day === "number" &&
+            typeof (bw as BlockedWindow).timeSlot === "string"
+        )
+      );
+    } else {
+      setBlockedWindows([]);
+    }
+  };
+
+  const addBlockedWindow = (window: BlockedWindow) => {
+    setBlockedWindows((current) => {
+      const alreadyBlocked = current.some(
+        (bw) => bw.day === window.day && bw.timeSlot === window.timeSlot
+      );
+      return alreadyBlocked ? current : [...current, window];
+    });
+  };
+
+  const removeBlockedWindow = (index: number) => {
+    setBlockedWindows((current) => current.filter((_, i) => i !== index));
   };
 
   const toggleInterest = (interest: Interest) => {
@@ -222,7 +256,7 @@ function App() {
           selectedAttractions,
           constraints: {
             maxActivitiesPerDay,
-            blockedWindows: [],
+            blockedWindows,
           },
         }),
       });
@@ -533,6 +567,7 @@ function App() {
                 days={days}
                 maxActivitiesPerDay={maxActivitiesPerDay}
                 selectedInterests={selectedInterests}
+                blockedWindows={blockedWindows}
                 cityAttractions={cityAttractions}
                 selectedAttractions={selectedAttractions}
                 loadingCityAttractions={loadingCityAttractions}
@@ -543,6 +578,8 @@ function App() {
                 onMaxActivitiesChange={setMaxActivitiesPerDay}
                 onToggleInterest={toggleInterest}
                 onToggleAttraction={toggleAttraction}
+                onAddBlockedWindow={addBlockedWindow}
+                onRemoveBlockedWindow={removeBlockedWindow}
                 onSubmit={generateItinerary}
                 onNavigate={navigate}
               />
@@ -584,6 +621,7 @@ type DetailsPageProps = {
   days: number;
   maxActivitiesPerDay: number;
   selectedInterests: Interest[];
+  blockedWindows: BlockedWindow[];
   cityAttractions: string[];
   selectedAttractions: string[];
   loadingCityAttractions: boolean;
@@ -594,6 +632,8 @@ type DetailsPageProps = {
   onMaxActivitiesChange: (value: number) => void;
   onToggleInterest: (value: Interest) => void;
   onToggleAttraction: (value: string) => void;
+  onAddBlockedWindow: (window: BlockedWindow) => void;
+  onRemoveBlockedWindow: (index: number) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onNavigate: (route: AppRoute) => void;
 };
@@ -603,6 +643,7 @@ function DetailsPage({
   days,
   maxActivitiesPerDay,
   selectedInterests,
+  blockedWindows,
   cityAttractions,
   selectedAttractions,
   loadingCityAttractions,
@@ -613,9 +654,21 @@ function DetailsPage({
   onMaxActivitiesChange,
   onToggleInterest,
   onToggleAttraction,
+  onAddBlockedWindow,
+  onRemoveBlockedWindow,
   onSubmit,
   onNavigate,
 }: DetailsPageProps) {
+  const [isInterestOpen, setIsInterestOpen] = useState(false);
+  const [newBlockDay, setNewBlockDay] = useState(1);
+  const [newBlockSlot, setNewBlockSlot] = useState<string>("Morning");
+  const [newBlockLabel, setNewBlockLabel] = useState("");
+
+  const handleAddBlock = () => {
+    onAddBlockedWindow({ day: newBlockDay, timeSlot: newBlockSlot, label: newBlockLabel.trim() });
+    setNewBlockLabel("");
+  };
+
   return (
     <main className="page-stack">
       <section className="surface-card surface-card--form">
@@ -705,22 +758,93 @@ function DetailsPage({
 
           <div className="field">
             <span className="field__label">Interests</span>
-            <div className="interest-grid">
-              {interestOptions.map((option) => {
-                const isSelected = selectedInterests.includes(option.value);
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`interest-pill ${isSelected ? "is-selected" : ""}`}
-                    onClick={() => onToggleInterest(option.value)}
-                  >
-                    <span className="interest-pill__title">{option.label}</span>
-                    <span className="interest-pill__text">{option.description}</span>
-                  </button>
-                );
-              })}
+            <div className="interest-dropdown">
+              <button
+                type="button"
+                className="interest-dropdown__trigger field__input"
+                onClick={() => setIsInterestOpen((o) => !o)}
+              >
+                <span>
+                  {selectedInterests.length === interestOptions.length
+                    ? "All categories selected"
+                    : `${selectedInterests.length} categor${selectedInterests.length === 1 ? "y" : "ies"} selected`}
+                </span>
+                <span className="interest-dropdown__arrow">{isInterestOpen ? "▲" : "▼"}</span>
+              </button>
+              {isInterestOpen && (
+                <div className="interest-dropdown__panel">
+                  {interestOptions.map((option) => {
+                    const isSelected = selectedInterests.includes(option.value);
+                    return (
+                      <label key={option.value} className="interest-checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => onToggleInterest(option.value)}
+                        />
+                        <span className="interest-checkbox-item__content">
+                          <span className="interest-checkbox-item__label">{option.label}</span>
+                          <span className="interest-checkbox-item__desc">{option.description}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
+          </div>
+
+          <div className="field">
+            <span className="field__label">Blocked Time Windows</span>
+            <div className="helper-text">
+              Block time slots reserved for conferences, meetings, or rest — nothing will be
+              scheduled in those windows.
+            </div>
+            <div className="blocked-window-form">
+              <select
+                className="field__input"
+                value={newBlockDay}
+                onChange={(e) => setNewBlockDay(Number(e.target.value))}
+              >
+                {Array.from({ length: days }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>Day {d}</option>
+                ))}
+              </select>
+              <select
+                className="field__input"
+                value={newBlockSlot}
+                onChange={(e) => setNewBlockSlot(e.target.value)}
+              >
+                {timeSlots.map((slot) => (
+                  <option key={slot} value={slot}>{slot}</option>
+                ))}
+              </select>
+              <input
+                className="field__input"
+                placeholder="Label (e.g. Conference)"
+                value={newBlockLabel}
+                onChange={(e) => setNewBlockLabel(e.target.value)}
+              />
+              <button type="button" className="secondary-button" onClick={handleAddBlock}>
+                Block
+              </button>
+            </div>
+            {blockedWindows.length > 0 && (
+              <div className="blocked-window-list">
+                {blockedWindows.map((bw, index) => (
+                  <div key={index} className="blocked-window-item">
+                    <span>Day {bw.day} · {bw.timeSlot}{bw.label ? ` — ${bw.label}` : ""}</span>
+                    <button
+                      type="button"
+                      className="danger-button"
+                      onClick={() => onRemoveBlockedWindow(index)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="planner-actions">
