@@ -132,17 +132,42 @@ const majorCapitalSet = new Set(
   })
 );
 
+// Primary category is always a confirmed-valid Geoapify category string.
+// Extras extend variety; if the combined request fails the fetch falls back
+// to the primary alone (see fetchPlacesForInterest below).
 const interestCategoryMap: Record<InterestKey, string[]> = {
-  food: ["catering.restaurant", "catering.cafe"],
-  museums: ["entertainment.museum"],
-  outdoors: ["leisure.park", "natural"],
-  shopping: ["commercial.shopping_mall", "commercial.marketplace", "commercial.supermarket"],
+  food: [
+    "catering.restaurant",   // primary — always valid
+    "catering.cafe",
+    "catering.fast_food",
+  ],
+  museums: [
+    "entertainment.museum",  // primary
+    "entertainment.art_gallery",
+    "entertainment.aquarium",
+    "entertainment.zoo",
+  ],
+  outdoors: [
+    "leisure.park",          // primary
+    "natural",
+    "leisure.garden",
+    "leisure.sports_centre",
+  ],
+  shopping: [
+    "commercial.shopping_mall",  // primary
+    "commercial.marketplace",
+    "commercial.supermarket",
+  ],
   nightlife: [
-    "catering.bar",
+    "catering.bar",          // primary
     "catering.pub",
     "catering.biergarten",
   ],
-  landmarks: ["tourism.sights", "heritage"],
+  landmarks: [
+    "tourism.sights",        // primary
+    "heritage",
+    "tourism.attraction",
+  ],
 };
 
 const defaultInterests: InterestKey[] = ["landmarks", "food"];
@@ -184,8 +209,47 @@ const getGeoapifyCategories = (interests: InterestKey[]): string => {
   interests.forEach((interest) => {
     interestCategoryMap[interest].forEach((category) => categories.add(category));
   });
-
   return Array.from(categories).join(",");
+};
+
+/**
+ * Fetch places for one interest group. Tries with the full category list first;
+ * if Geoapify rejects it (e.g. an unrecognised subcategory), falls back to the
+ * primary (first) category which is always confirmed valid.
+ */
+const fetchPlacesForInterest = async (
+  interest: InterestKey,
+  filter: string,
+  limit: number,
+  apiKey: string
+): Promise<Activity[]> => {
+  const buildUrl = (cats: string) => {
+    const url = new URL("https://api.geoapify.com/v2/places");
+    url.searchParams.set("categories", cats);
+    url.searchParams.set("filter", filter);
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("apiKey", apiKey);
+    return url.toString();
+  };
+
+  const parseFeatures = async (response: Response): Promise<Activity[]> => {
+    if (!response.ok) return [];
+    const data = (await response.json()) as { features?: GeoapifyFeature[] };
+    return (data.features ?? [])
+      .map(normalizeActivity)
+      .filter((a): a is Activity => a !== null);
+  };
+
+  // Attempt 1: full category list for this interest
+  const fullCats = interestCategoryMap[interest].join(",");
+  const results = await parseFeatures(await fetch(buildUrl(fullCats)));
+  if (results.length > 0) return results;
+
+  // Attempt 2: primary category only (always confirmed valid)
+  const primaryCat = interestCategoryMap[interest][0];
+  if (primaryCat === fullCats) return results; // already tried this
+  console.warn(`[itinerary] Full category fetch for "${interest}" returned 0 results; retrying with primary "${primaryCat}"`);
+  return parseFeatures(await fetch(buildUrl(primaryCat)));
 };
 
 const normalizeCategory = (value: string) =>
@@ -195,11 +259,18 @@ const normalizeName = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const estimateDurationMinutes = (category: string) => {
-  if (category.includes("museum")) return 120;
-  if (category.includes("park") || category.includes("natural")) return 90;
-  if (category.includes("restaurant") || category.includes("cafe") || category.includes("bar")) {
-    return 75;
-  }
+  const cat = category.toLowerCase();
+  if (cat.includes("museum") || cat.includes("zoo") || cat.includes("aquarium") || cat.includes("theme_park")) return 120;
+  if (cat.includes("art_gallery") || cat.includes("exhibition") || cat.includes("planetarium")) return 90;
+  if (cat.includes("park") || cat.includes("natural") || cat.includes("garden") || cat.includes("national_park")) return 90;
+  if (cat.includes("beach") || cat.includes("marina") || cat.includes("sport")) return 90;
+  if (cat.includes("restaurant") || cat.includes("food_court")) return 75;
+  if (cat.includes("cafe") || cat.includes("bakery") || cat.includes("ice_cream")) return 45;
+  if (cat.includes("bar") || cat.includes("pub") || cat.includes("biergarten") || cat.includes("nightclub") || cat.includes("casino")) return 90;
+  if (cat.includes("cinema")) return 120;
+  if (cat.includes("shopping_mall") || cat.includes("department_store")) return 90;
+  if (cat.includes("marketplace") || cat.includes("clothing") || cat.includes("gift") || cat.includes("books") || cat.includes("antiques")) return 60;
+  if (cat.includes("sights") || cat.includes("heritage") || cat.includes("attraction") || cat.includes("historic")) return 60;
   return 60;
 };
 
@@ -351,53 +422,67 @@ const TIME_SLOTS = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"] 
 /** Returns preferred time slots for a category, from most to least preferred. */
 const getCategoryTimePreference = (category: string): string[] => {
   const cat = category.toLowerCase();
-  if (
-    cat.includes("bar") ||
-    cat.includes("pub") ||
-    cat.includes("biergarten") ||
-    cat.includes("nightclub") ||
-    cat.includes("nightlife")
-  ) {
+
+  // Nightlife — strictly evening/night
+  if (cat.includes("bar") || cat.includes("pub") || cat.includes("biergarten") ||
+      cat.includes("nightclub") || cat.includes("casino") || cat.includes("nightlife")) {
     return ["Night", "Evening"];
   }
-  if (cat.includes("cafe")) {
+  // Cinema — evening preferred but afternoon works
+  if (cat.includes("cinema")) {
+    return ["Evening", "Afternoon", "Night"];
+  }
+  // Cafes and bakeries — morning treats
+  if (cat.includes("cafe") || cat.includes("bakery") || cat.includes("ice_cream")) {
     return ["Morning", "Late Morning", "Afternoon"];
   }
-  if (cat.includes("restaurant")) {
-    // Spread restaurants across meal times
+  // Restaurants — spread across meal times
+  if (cat.includes("restaurant") || cat.includes("food_court")) {
     return ["Afternoon", "Evening", "Morning"];
   }
-  if (cat.includes("park") || cat.includes("natural")) {
-    return ["Morning", "Late Morning"];
+  // Fast food — any time but not night
+  if (cat.includes("fast_food")) {
+    return ["Late Morning", "Afternoon", "Morning"];
   }
-  if (cat.includes("museum")) {
-    return ["Afternoon", "Late Morning"];
+  // Outdoor / nature — best in the morning
+  if (cat.includes("park") || cat.includes("natural") || cat.includes("garden") ||
+      cat.includes("beach") || cat.includes("national_park") || cat.includes("marina") ||
+      cat.includes("sport")) {
+    return ["Morning", "Late Morning", "Afternoon"];
   }
-  if (
-    cat.includes("shopping") ||
-    cat.includes("mall") ||
-    cat.includes("marketplace") ||
-    cat.includes("supermarket")
-  ) {
+  // Museums, galleries, aquariums — mid-day
+  if (cat.includes("museum") || cat.includes("art_gallery") || cat.includes("aquarium") ||
+      cat.includes("planetarium") || cat.includes("exhibition") || cat.includes("zoo")) {
     return ["Late Morning", "Afternoon"];
   }
-  if (cat.includes("sights") || cat.includes("heritage") || cat.includes("tourism")) {
+  // Theme parks — full day starting morning
+  if (cat.includes("theme_park")) {
+    return ["Morning", "Late Morning"];
+  }
+  // Shopping — mid-morning to afternoon when stores are open
+  if (cat.includes("shopping_mall") || cat.includes("department_store") ||
+      cat.includes("marketplace") || cat.includes("clothing") || cat.includes("gift") ||
+      cat.includes("books") || cat.includes("antiques")) {
+    return ["Late Morning", "Afternoon"];
+  }
+  // Landmarks and historic sites — any daytime slot
+  if (cat.includes("sights") || cat.includes("heritage") || cat.includes("attraction") ||
+      cat.includes("historic") || cat.includes("tourism")) {
     return ["Morning", "Late Morning", "Afternoon"];
   }
   return [...TIME_SLOTS];
 };
 
-/**
- * Interleaves activities from different interest categories so each day gets
- * a variety of category types rather than all food or all landmarks clumped.
- */
-const interleaveByCategory = (activities: Activity[], interests: InterestKey[]): Activity[] => {
-  const groups: Record<string, Activity[]> = {};
-  [...interests, "other"].forEach((key) => {
-    groups[key] = [];
-  });
+/** Groups scored activities by interest category (preserving score order within each group). */
+const groupByInterest = (
+  scored: Array<{ activity: Activity; score: number }>,
+  interests: InterestKey[]
+): Map<string, Activity[]> => {
+  const allKeys = [...interests as string[], "other"];
+  const groups = new Map<string, Activity[]>();
+  allKeys.forEach((k) => groups.set(k, []));
 
-  activities.forEach((activity) => {
+  scored.forEach(({ activity }) => {
     let placed = false;
     for (const interest of interests) {
       const cats = interestCategoryMap[interest].map(normalizeCategory);
@@ -412,24 +497,15 @@ const interleaveByCategory = (activities: Activity[], interests: InterestKey[]):
           )
         )
       ) {
-        groups[interest].push(activity);
+        groups.get(interest)!.push(activity);
         placed = true;
         break;
       }
     }
-    if (!placed) groups["other"].push(activity);
+    if (!placed) groups.get("other")!.push(activity);
   });
 
-  // Round-robin across category groups: food[0], landmark[0], museum[0], food[1], ...
-  const result: Activity[] = [];
-  const allKeys = [...interests, "other"];
-  const maxLen = Math.max(...allKeys.map((k) => groups[k].length), 0);
-  for (let i = 0; i < maxLen; i++) {
-    for (const key of allKeys) {
-      if (i < groups[key].length) result.push(groups[key][i]);
-    }
-  }
-  return result;
+  return groups;
 };
 
 /**
@@ -492,45 +568,118 @@ const buildItinerary = (
   pinnedActivities: Activity[] = [],
   blockedWindows: BlockedWindow[] = []
 ) => {
-  const pinnedIds = new Set(pinnedActivities.map((activity) => activity.id));
-  const ranked = activities
-    .filter((activity) => !pinnedIds.has(activity.id))
-    .map((activity) => ({ activity, score: scoreActivity(activity, interests) }))
-    .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.activity);
+  const pinnedIds = new Set(pinnedActivities.map((a) => a.id));
 
-  // Interleave ranked activities so categories are spread evenly across days
-  const interleaved = interleaveByCategory(ranked, interests);
-  const orderedActivities = [...pinnedActivities, ...interleaved];
+  const scored = activities
+    .filter((a) => !pinnedIds.has(a.id))
+    .map((a) => ({ activity: a, score: scoreActivity(a, interests) }))
+    .sort((a, b) => b.score - a.score);
+
+  const scoreOf = new Map(scored.map(({ activity, score }) => [activity.id, score]));
+
+  // Group activities by interest category, preserving score order within each group
+  const groups = groupByInterest(scored, interests);
+  const allGroupKeys = [...interests as string[], "other"];
+
+  // Round-robin assign each group's activities across days:
+  //   food[0]→day1, food[1]→day2, food[2]→day3, food[3]→day1, ...
+  // This ensures every day gets roughly equal quality from every category,
+  // even when one category has far more results than the others.
+  const dayBuckets: Activity[][] = Array.from({ length: days }, () => []);
+  allGroupKeys.forEach((key) => {
+    groups.get(key)!.forEach((activity, i) => {
+      dayBuckets[i % days].push(activity);
+    });
+  });
+
+  // Spread pinned activities evenly across days
+  const pinnedPerDay: Activity[][] = Array.from({ length: days }, () => []);
+  pinnedActivities.forEach((act, i) => {
+    pinnedPerDay[i % days].push(act);
+  });
+
+  const usedIds = new Set<string>();
 
   const itineraryDays = Array.from({ length: days }, (_, index) => ({
     dayNumber: index + 1,
     activities: [] as Array<Activity & { suggestedTimeSlot: string }>,
   }));
 
-  let pointer = 0;
-
-  for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
+  for (let dayIndex = 0; dayIndex < days; dayIndex++) {
     const dayNumber = dayIndex + 1;
-
-    // Determine which time slots are available (not blocked by user constraints)
     const blockedSlots = new Set(
       blockedWindows.filter((bw) => bw.day === dayNumber).map((bw) => bw.timeSlot)
     );
     const availableSlots = [...TIME_SLOTS].filter((slot) => !blockedSlots.has(slot));
     const slotsToFill = Math.min(maxActivitiesPerDay, availableSlots.length);
 
-    const dayActivities = orderedActivities.slice(pointer, pointer + slotsToFill);
-    pointer += slotsToFill;
+    const dayActivities: Activity[] = [];
 
-    // Assign time slots with category-awareness (nightlife → night, parks → morning, etc.)
+    // 1. Pinned attractions for this day take priority
+    pinnedPerDay[dayIndex].forEach((a) => {
+      if (!usedIds.has(a.id) && dayActivities.length < slotsToFill) {
+        dayActivities.push(a);
+        usedIds.add(a.id);
+      }
+    });
+
+    const bucket = dayBuckets[dayIndex].filter((a) => !usedIds.has(a.id));
+
+    // 2. Phase 1 — pick the best-scored activity from each interest group
+    //    so every day is guaranteed to have category variety.
+    const bucketByGroup = new Map<string, Activity[]>();
+    allGroupKeys.forEach((k) => bucketByGroup.set(k, []));
+    bucket.forEach((activity) => {
+      for (const key of allGroupKeys) {
+        if (key === "other") continue;
+        const cats = interestCategoryMap[key as InterestKey].map(normalizeCategory);
+        const actCats =
+          activity.categories.length > 0
+            ? activity.categories
+            : [normalizeCategory(activity.category)];
+        if (
+          cats.some((c) =>
+            actCats.some(
+              (ac) => ac === c || ac.startsWith(`${c}.`) || c.startsWith(`${ac}.`)
+            )
+          )
+        ) {
+          bucketByGroup.get(key)!.push(activity);
+          return;
+        }
+      }
+      bucketByGroup.get("other")!.push(activity);
+    });
+
+    for (const key of allGroupKeys) {
+      if (dayActivities.length >= slotsToFill) break;
+      const candidates = bucketByGroup
+        .get(key)!
+        .filter((a) => !usedIds.has(a.id))
+        .sort((a, b) => (scoreOf.get(b.id) ?? 0) - (scoreOf.get(a.id) ?? 0));
+      if (candidates.length > 0) {
+        dayActivities.push(candidates[0]);
+        usedIds.add(candidates[0].id);
+      }
+    }
+
+    // 3. Phase 2 — fill any remaining slots with the highest-scored leftovers
+    if (dayActivities.length < slotsToFill) {
+      const leftovers = bucket
+        .filter((a) => !usedIds.has(a.id))
+        .sort((a, b) => (scoreOf.get(b.id) ?? 0) - (scoreOf.get(a.id) ?? 0));
+      for (const a of leftovers) {
+        if (dayActivities.length >= slotsToFill) break;
+        dayActivities.push(a);
+        usedIds.add(a.id);
+      }
+    }
+
     itineraryDays[dayIndex].activities = assignTimeSlotsForDay(dayActivities, availableSlots);
   }
 
-  return {
-    itineraryDays,
-    unassignedActivities: orderedActivities.slice(pointer),
-  };
+  const unassigned = scored.map((s) => s.activity).filter((a) => !usedIds.has(a.id));
+  return { itineraryDays, unassignedActivities: unassigned };
 };
 
 router.get("/capital-cities", (_req, res) => {
@@ -651,36 +800,25 @@ router.post("/generate", async (req, res) => {
       });
     }
 
-    const categories = getGeoapifyCategories(interests);
-    const placeLimit = Math.min(days * maxActivitiesPerDay * 5, 80);
+    // Fetch each interest in parallel with its own result budget so no single
+    // category (e.g. restaurants in NYC) can crowd out the others.
+    const perInterestLimit = Math.min(
+      Math.ceil((days * maxActivitiesPerDay * 4) / interests.length),
+      50
+    );
 
-    const placesUrl = new URL("https://api.geoapify.com/v2/places");
-    placesUrl.searchParams.set("categories", categories);
-    placesUrl.searchParams.set("filter", filter);
-    placesUrl.searchParams.set("limit", String(placeLimit));
-    placesUrl.searchParams.set("apiKey", apiKey);
+    const interestFetches = interests.map((interest) =>
+      fetchPlacesForInterest(interest, filter, perInterestLimit, apiKey)
+    );
 
-    const placesResponse = await fetch(placesUrl.toString());
-    const placesData = (await placesResponse.json()) as {
-      features?: GeoapifyFeature[];
-    };
+    const perInterestResults = await Promise.all(interestFetches);
 
-    if (!placesResponse.ok) {
-      const detailsMessage =
-        typeof (placesData as { message?: unknown }).message === "string"
-          ? (placesData as { message: string }).message
-          : null;
-      return res.status(placesResponse.status).json({
-        error: detailsMessage
-          ? `Geoapify places lookup failed: ${detailsMessage}`
-          : "Geoapify places lookup failed.",
-        details: placesData,
-      });
+    if (perInterestResults.every((r) => r.length === 0)) {
+      return res.status(502).json({ error: "Geoapify places lookup failed for all interests." });
     }
 
-    const normalized = (placesData.features ?? [])
-      .map(normalizeActivity)
-      .filter((activity): activity is Activity => activity !== null);
+    const normalized = perInterestResults.flat();
+    const categories = getGeoapifyCategories(interests);
     const mustSeeLookup: Activity[] = [];
     if (selectedAttractions.length > 0) {
       const attractionUrl = new URL("https://api.geoapify.com/v2/places");

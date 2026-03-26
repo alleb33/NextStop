@@ -6,7 +6,7 @@
   "scripts": {
     "build": "npx tsc",
     "start": "npx tsc && node ./dist/server.js",
-    "dev": "ts-node-dev src/index.ts", 
+    "dev": "ts-node-dev src/index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Emily Bishop and Bella Vos",

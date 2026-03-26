@@ -483,7 +483,7 @@
 
 /* Interest dropdown */
 .interest-dropdown {
-  position: relative;
+  /* no relative positioning needed — panel is in-flow */
 }
 
 .interest-dropdown__trigger {
@@ -501,15 +501,12 @@
 }
 
 .interest-dropdown__panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: 100;
+  /* in-flow: pushes content below instead of floating over siblings */
+  margin-top: 6px;
   border: 1px solid rgba(38, 63, 55, 0.14);
   border-radius: 14px;
   background: #fff;
-  box-shadow: 0 16px 40px rgba(20, 37, 32, 0.14);
+  box-shadow: 0 8px 24px rgba(20, 37, 32, 0.10);
   max-height: 300px;
   overflow-y: auto;
 }
