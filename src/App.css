@@ -35,11 +35,6 @@
   z-index: 1;
 }
 
-.app-layout {
-  display: grid;
-  gap: 1.25rem;
-}
-
 .surface-card {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -61,43 +56,121 @@
   padding: 1rem 1.2rem;
 }
 
-.sidebar {
-  display: grid;
-  gap: 1.4rem;
-  align-content: start;
+/* ── Top Nav ─────────────────────────────────────────────────── */
+
+.app-topnav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 0.75rem 2rem;
+  background: rgba(247, 248, 244, 0.88);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
 }
 
-.sidebar__brand h1,
+.app-topnav__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.topnav-kicker {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--primary-strong);
+}
+
+.topnav-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.app-topnav__steps {
+  display: flex;
+  gap: 0.2rem;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: var(--radius-md);
+  padding: 0.25rem;
+}
+
+.topnav-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  padding: 0.4rem 1.4rem;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+
+.topnav-step:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.topnav-step.is-active {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(20, 37, 32, 0.12);
+}
+
+.topnav-step__eyebrow {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary-strong);
+}
+
+.topnav-step__label {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* ── Page Content ────────────────────────────────────────────── */
+
+.app-page-content {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* ── Typography shared ───────────────────────────────────────── */
+
 .section-heading h2,
 .results-hero h2,
 .empty-state h2,
 .saved-card h3,
-.day-card__header h3 {
+.day-card__header h3,
+.past-trips-section h2 {
   font-family: Georgia, "Times New Roman", serif;
 }
 
-.sidebar__brand h1 {
-  margin: 0.4rem 0 0.55rem;
-  font-size: clamp(1.9rem, 3vw, 2.8rem);
-  line-height: 0.98;
-}
-
-.sidebar__brand p,
 .section-heading p,
 .results-hero p,
 .empty-state p,
 .saved-card p,
 .trip-summary__meta,
 .activity-card__address,
-.sidebar-empty,
-.sidebar-trip__meta {
+.past-trips-empty {
   color: var(--muted);
 }
 
 .hero-kicker,
 .section-heading__kicker,
 .saved-card__eyebrow,
-.step-nav__eyebrow,
 .trip-summary__label,
 .stat-card__label {
   display: inline-block;
@@ -108,99 +181,41 @@
   color: var(--primary-strong);
 }
 
-.step-nav,
-.sidebar-saved-list,
 .page-stack,
 .planner-form,
 .itinerary-days,
-.activity-list,
-.sidebar__section {
+.activity-list {
   display: grid;
   gap: 1rem;
 }
 
-.step-nav__item {
-  text-align: left;
-  border: 1px solid transparent;
-  border-radius: var(--radius-lg);
-  padding: 1rem 1.15rem;
-  background: rgba(255, 255, 255, 0.66);
-  color: var(--text);
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease;
+/* ── Past Trips section (on Itinerary page) ──────────────────── */
+
+.past-trips-section {
+  margin-top: 1rem;
 }
 
-.step-nav__item:hover:not(:disabled),
-.step-nav__item:focus-visible:not(:disabled),
-.sidebar-trip:hover,
-.sidebar-trip:focus-visible {
-  transform: translateY(-2px);
-  border-color: rgba(27, 127, 104, 0.3);
-  background: rgba(255, 255, 255, 0.92);
-}
-
-.step-nav__item:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.step-nav__item.is-active {
-  background: linear-gradient(135deg, rgba(27, 127, 104, 0.17), rgba(255, 255, 255, 0.95));
-  border-color: rgba(27, 127, 104, 0.26);
-}
-
-.step-nav__label {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: 1.05rem;
-  font-weight: 600;
-}
-
-.sidebar__section-header {
+.past-trips-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
 }
 
-.sidebar__refresh {
-  border: none;
-  background: transparent;
-  color: var(--primary-strong);
-  font-size: 0.88rem;
-  font-weight: 700;
+.past-trips-header h2 {
+  margin: 0.25rem 0 0;
+  font-size: clamp(1.3rem, 2.5vw, 1.7rem);
 }
 
-.sidebar__refresh:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.past-trips-empty {
+  margin: 0;
 }
 
-.sidebar-trip {
-  border: 1px solid rgba(38, 63, 55, 0.09);
-  background: rgba(255, 255, 255, 0.68);
-  border-radius: 16px;
-  padding: 0.9rem;
-  text-align: left;
-  transition:
-    transform 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease;
-}
-
-.sidebar-trip__title,
-.sidebar-trip__meta {
-  display: block;
-}
-
-.sidebar-trip__title {
-  font-weight: 700;
-}
-
-.main-panel {
-  min-width: 0;
+.past-trips-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
 .status-stack {
@@ -596,15 +611,18 @@
   }
 }
 
-@media (min-width: 992px) {
-  .app-layout {
-    grid-template-columns: 320px minmax(0, 1fr);
-    align-items: start;
+@media (max-width: 600px) {
+  .app-topnav {
+    padding: 0.65rem 1rem;
+    gap: 0.75rem;
   }
 
-  .sidebar {
-    position: sticky;
-    top: 2rem;
+  .topnav-step {
+    padding: 0.35rem 0.75rem;
+  }
+
+  .topnav-title {
+    display: none;
   }
 }
 
@@ -635,5 +653,161 @@
   .danger-button {
     width: 100%;
     justify-content: center;
+  }
+}
+
+/* ── Login Page ─────────────────────────────────────────────── */
+
+.login-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  display: grid;
+  gap: 1.6rem;
+}
+
+.login-card__brand h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  margin: 0.4rem 0 0.4rem;
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  line-height: 1;
+}
+
+.login-card__brand p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.login-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.login-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.login-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.login-input {
+  border-radius: var(--radius-md) !important;
+  border: 1px solid var(--border) !important;
+  background: rgba(255, 255, 255, 0.7) !important;
+  color: var(--text) !important;
+  padding: 0.65rem 1rem !important;
+  font-size: 0.95rem !important;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.login-input:focus {
+  outline: none !important;
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px var(--primary-soft) !important;
+}
+
+.login-submit {
+  width: 100%;
+  justify-content: center;
+  margin-top: 0.4rem;
+}
+
+/* ── Logout Button ──────────────────────────────────────────── */
+
+.logout-button {
+  align-self: start;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.logout-button:hover {
+  color: var(--text);
+  border-color: rgba(27, 127, 104, 0.3);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* ── Shared itinerary page ──────────────────────────────────── */
+
+.shared-topnav {
+  justify-content: space-between;
+}
+
+.shared-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary-strong);
+  background: var(--primary-soft);
+  border-radius: 99px;
+  padding: 0.3rem 0.85rem;
+}
+
+/* ── Print / Export PDF ─────────────────────────────────────── */
+
+@media print {
+  .no-print,
+  .app-topnav,
+  .past-trips-section,
+  .reassign-panel,
+  .hero-actions,
+  .status-stack,
+  .metadata-row,
+  .note-list {
+    display: none !important;
+  }
+
+  .app-shell {
+    background: white;
+  }
+
+  .app-background {
+    display: none;
+  }
+
+  .app-page-content {
+    padding: 0;
+    max-width: 100%;
+  }
+
+  .surface-card {
+    box-shadow: none;
+    border: 1px solid #ddd;
+    backdrop-filter: none;
+    background: white;
+    break-inside: avoid;
+  }
+
+  .day-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .activity-card {
+    break-inside: avoid;
+  }
+
+  .danger-button {
+    display: none !important;
   }
 }

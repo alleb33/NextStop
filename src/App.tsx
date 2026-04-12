@@ -10,7 +10,7 @@ type Interest =
   | "shopping"
   | "nightlife";
 
-type AppRoute = "/" | "/itinerary" | "/saved";
+type AppRoute = "/" | "/itinerary" | "/login";
 
 type ItineraryActivity = {
   id: string;
@@ -29,6 +29,7 @@ type ItineraryDay = {
 type GenerateResponse = {
   _id?: string;
   title?: string;
+  shareToken?: string;
   createdAt?: string;
   updatedAt?: string;
   tripInput: {
@@ -90,27 +91,22 @@ const interestOptions: { value: Interest; label: string; description: string }[]
 ];
 
 const navItems: NavItem[] = [
-  { route: "/", label: "Plan Trip", eyebrow: "Step 1" },
+  { route: "/", label: "Trip Details", eyebrow: "Step 1" },
   { route: "/itinerary", label: "Itinerary", eyebrow: "Step 2" },
-  { route: "/saved", label: "Saved Trips", eyebrow: "Step 3" },
 ];
 
 const timeSlots = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"];
 
 const getRouteFromPath = (pathname: string): AppRoute => {
   if (pathname === "/itinerary") return "/itinerary";
-  if (pathname === "/saved") return "/saved";
   return "/";
 };
 
-const formatDateTime = (value?: string) => {
-  if (!value) return "";
-  return new Date(value).toLocaleString();
-};
 
 const slotForIndex = (index: number) => timeSlots[Math.min(index, timeSlots.length - 1)];
 
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [route, setRoute] = useState<AppRoute>(getRouteFromPath(window.location.pathname));
   const [destinationCity, setDestinationCity] = useState("Atlanta, GA");
   const [days, setDays] = useState(2);
@@ -422,6 +418,31 @@ function App() {
     setSelectedUnassignedByDay((current) => ({ ...current, [dayNumber]: "" }));
   };
 
+  const copyShareLink = async () => {
+    if (!result?._id) return;
+    try {
+      let token = result.shareToken;
+      if (!token) {
+        const response = await fetch(
+          `${API_BASE_URL}/api/itinerary/saved/${result._id}/share`,
+          { method: "POST" }
+        );
+        const data = (await response.json()) as { shareToken?: string; error?: string };
+        if (!response.ok || !data.shareToken) {
+          throw new Error(data.error || "Failed to generate share link.");
+        }
+        token = data.shareToken;
+        setResult((current) => (current ? { ...current, shareToken: token } : current));
+      }
+      await navigator.clipboard.writeText(
+        `${window.location.origin}/shared/${token}`
+      );
+      setSaveMessage("Share link copied to clipboard!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to copy link.");
+    }
+  };
+
   useEffect(() => {
     void loadSavedTrips();
   }, []);
@@ -482,135 +503,104 @@ function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  // Shared itinerary view — public, no login required
+  if (window.location.pathname.startsWith("/shared/")) {
+    const token = window.location.pathname.replace("/shared/", "");
+    return <SharedItineraryPage token={token} apiBase={API_BASE_URL} />;
+  }
+
+  if (!isLoggedIn) {
+    return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+  }
+
   return (
     <div className="app-shell">
       <div className="app-background" />
-      <div className="container app-container py-4 py-lg-5">
-        <div className="app-layout">
-          <aside className="sidebar surface-card">
-            <div className="sidebar__brand">
-              <span className="hero-kicker">NextStop Planner</span>
-              <h1>Plan your trip</h1>
-              <p>Start with trip details, then move into the generated itinerary.</p>
-            </div>
 
-            <nav className="step-nav" aria-label="Trip planning steps">
-              {navItems.map((item) => {
-                const isActive = route === item.route;
-                const isLocked = item.route === "/itinerary" && !result;
-                return (
-                  <button
-                    key={item.route}
-                    type="button"
-                    className={`step-nav__item ${isActive ? "is-active" : ""}`}
-                    onClick={() => navigate(item.route)}
-                    disabled={isLocked}
-                  >
-                    <span className="step-nav__eyebrow">{item.eyebrow}</span>
-                    <span className="step-nav__label">{item.label}</span>
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="sidebar__section">
-              <div className="sidebar__section-header">
-                <span className="section-heading__kicker">Saved</span>
-                <button
-                  type="button"
-                  className="sidebar__refresh"
-                  onClick={() => void loadSavedTrips()}
-                  disabled={loadingSavedTrips}
-                >
-                  {loadingSavedTrips ? "Loading..." : "Refresh"}
-                </button>
-              </div>
-
-              <div className="sidebar-saved-list">
-                {savedTrips.length === 0 && !loadingSavedTrips && (
-                  <div className="sidebar-empty">No saved itineraries yet.</div>
-                )}
-
-                {savedTrips.slice(0, 6).map((trip) => (
-                  <button
-                    key={trip._id}
-                    type="button"
-                    className="sidebar-trip"
-                    onClick={() => void loadSavedTrip(trip._id)}
-                  >
-                    <span className="sidebar-trip__title">
-                      {trip.title || trip.tripInput.destinationCity}
-                    </span>
-                    <span className="sidebar-trip__meta">
-                      {trip.tripInput.days} day{trip.tripInput.days === 1 ? "" : "s"} in{" "}
-                      {trip.tripInput.destinationCity}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </aside>
-
-          <section className="main-panel">
-            {(error || saveMessage) && (
-              <div className="status-stack">
-                {error && <div className="status-banner status-banner--error">{error}</div>}
-                {saveMessage && (
-                  <div className="status-banner status-banner--success">{saveMessage}</div>
-                )}
-              </div>
-            )}
-
-            {route === "/" && (
-              <DetailsPage
-                destinationCity={destinationCity}
-                days={days}
-                maxActivitiesPerDay={maxActivitiesPerDay}
-                selectedInterests={selectedInterests}
-                blockedWindows={blockedWindows}
-                cityAttractions={cityAttractions}
-                selectedAttractions={selectedAttractions}
-                loadingCityAttractions={loadingCityAttractions}
-                loading={loading}
-                result={result}
-                onDestinationChange={setDestinationCity}
-                onDaysChange={setDays}
-                onMaxActivitiesChange={setMaxActivitiesPerDay}
-                onToggleInterest={toggleInterest}
-                onToggleAttraction={toggleAttraction}
-                onAddBlockedWindow={addBlockedWindow}
-                onRemoveBlockedWindow={removeBlockedWindow}
-                onSubmit={generateItinerary}
-                onNavigate={navigate}
-              />
-            )}
-
-            {route === "/itinerary" && (
-              <ItineraryPage
-                loading={loading}
-                result={result}
-                saving={saving}
-                selectedUnassignedByDay={selectedUnassignedByDay}
-                onSelectedUnassignedChange={setSelectedUnassignedByDay}
-                onSave={saveCurrentItinerary}
-                onRemoveActivity={removeActivityFromDay}
-                onAddUnassigned={addUnassignedToDay}
-                onNavigate={navigate}
-              />
-            )}
-
-            {route === "/saved" && (
-              <SavedTripsPage
-                loading={loadingSavedTrips}
-                deletingTripId={deletingTripId}
-                savedTrips={savedTrips}
-                onRefresh={loadSavedTrips}
-                onLoadTrip={loadSavedTrip}
-                onDeleteTrip={deleteSavedTrip}
-              />
-            )}
-          </section>
+      <header className="app-topnav">
+        <div className="app-topnav__brand">
+          <span className="topnav-kicker">NextStop</span>
+          <span className="topnav-title">Planner</span>
         </div>
+
+        <nav className="app-topnav__steps" aria-label="Trip planning steps">
+          {navItems.map((item) => (
+            <button
+              key={item.route}
+              type="button"
+              className={`topnav-step ${route === item.route ? "is-active" : ""}`}
+              onClick={() => navigate(item.route)}
+            >
+              <span className="topnav-step__eyebrow">{item.eyebrow}</span>
+              <span className="topnav-step__label">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <button
+          type="button"
+          className="logout-button"
+          onClick={() => setIsLoggedIn(false)}
+        >
+          Sign Out
+        </button>
+      </header>
+
+      <div className="app-page-content">
+        {(error || saveMessage) && (
+          <div className="status-stack">
+            {error && <div className="status-banner status-banner--error">{error}</div>}
+            {saveMessage && (
+              <div className="status-banner status-banner--success">{saveMessage}</div>
+            )}
+          </div>
+        )}
+
+        {route === "/" && (
+          <DetailsPage
+            destinationCity={destinationCity}
+            days={days}
+            maxActivitiesPerDay={maxActivitiesPerDay}
+            selectedInterests={selectedInterests}
+            blockedWindows={blockedWindows}
+            cityAttractions={cityAttractions}
+            selectedAttractions={selectedAttractions}
+            loadingCityAttractions={loadingCityAttractions}
+            loading={loading}
+            result={result}
+            onDestinationChange={setDestinationCity}
+            onDaysChange={setDays}
+            onMaxActivitiesChange={setMaxActivitiesPerDay}
+            onToggleInterest={toggleInterest}
+            onToggleAttraction={toggleAttraction}
+            onAddBlockedWindow={addBlockedWindow}
+            onRemoveBlockedWindow={removeBlockedWindow}
+            onSubmit={generateItinerary}
+            onNavigate={navigate}
+          />
+        )}
+
+        {route === "/itinerary" && (
+          <ItineraryPage
+            loading={loading}
+            result={result}
+            saving={saving}
+            savedTrips={savedTrips}
+            loadingSavedTrips={loadingSavedTrips}
+            deletingTripId={deletingTripId}
+            selectedUnassignedByDay={selectedUnassignedByDay}
+            onSelectedUnassignedChange={setSelectedUnassignedByDay}
+            onSave={saveCurrentItinerary}
+            onCopyLink={copyShareLink}
+            onPrint={() => window.print()}
+            onRemoveActivity={removeActivityFromDay}
+            onAddUnassigned={addUnassignedToDay}
+            onLoadTrip={loadSavedTrip}
+            onDeleteTrip={deleteSavedTrip}
+            onRefreshTrips={loadSavedTrips}
+            onNavigate={navigate}
+          />
+        )}
       </div>
     </div>
   );
@@ -897,11 +887,19 @@ type ItineraryPageProps = {
   loading: boolean;
   result: GenerateResponse | null;
   saving: boolean;
+  savedTrips: SavedTripSummary[];
+  loadingSavedTrips: boolean;
+  deletingTripId: string | null;
   selectedUnassignedByDay: Record<number, string>;
   onSelectedUnassignedChange: Dispatch<SetStateAction<Record<number, string>>>;
   onSave: () => Promise<void>;
+  onCopyLink: () => Promise<void>;
+  onPrint: () => void;
   onRemoveActivity: (dayNumber: number, activityId: string) => void;
   onAddUnassigned: (dayNumber: number) => void;
+  onLoadTrip: (tripId: string) => Promise<void>;
+  onDeleteTrip: (tripId: string) => Promise<void>;
+  onRefreshTrips: () => Promise<void>;
   onNavigate: (route: AppRoute) => void;
 };
 
@@ -909,11 +907,19 @@ function ItineraryPage({
   loading,
   result,
   saving,
+  savedTrips,
+  loadingSavedTrips,
+  deletingTripId,
   selectedUnassignedByDay,
   onSelectedUnassignedChange,
   onSave,
+  onCopyLink,
+  onPrint,
   onRemoveActivity,
   onAddUnassigned,
+  onLoadTrip,
+  onDeleteTrip,
+  onRefreshTrips,
   onNavigate,
 }: ItineraryPageProps) {
   if (!result && !loading) {
@@ -953,6 +959,23 @@ function ItineraryPage({
               disabled={!result || saving}
             >
               {saving ? "Saving..." : result?._id ? "Update saved itinerary" : "Save itinerary"}
+            </button>
+            <button
+              type="button"
+              className="secondary-button no-print"
+              onClick={() => void onCopyLink()}
+              disabled={!result?._id}
+              title={!result?._id ? "Save the itinerary first to share it" : "Copy a read-only link"}
+            >
+              Copy link
+            </button>
+            <button
+              type="button"
+              className="secondary-button no-print"
+              onClick={onPrint}
+              disabled={!result}
+            >
+              Export PDF
             </button>
           </div>
         </div>
@@ -1075,93 +1098,65 @@ function ItineraryPage({
           ))}
         </section>
       )}
-    </main>
-  );
-}
 
-type SavedTripsPageProps = {
-  loading: boolean;
-  deletingTripId: string | null;
-  savedTrips: SavedTripSummary[];
-  onRefresh: () => Promise<void>;
-  onLoadTrip: (tripId: string) => Promise<void>;
-  onDeleteTrip: (tripId: string) => Promise<void>;
-};
-
-function SavedTripsPage({
-  loading,
-  deletingTripId,
-  savedTrips,
-  onRefresh,
-  onLoadTrip,
-  onDeleteTrip,
-}: SavedTripsPageProps) {
-  return (
-    <main className="page-stack">
-      <section className="surface-card surface-card--hero">
-        <div className="results-hero">
+      <section className="surface-card past-trips-section">
+        <div className="past-trips-header">
           <div>
-            <span className="section-heading__kicker">Saved Itineraries</span>
-            <h2>Your trip library</h2>
-            <p>Reopen saved plans, review the latest edits, or remove ones you no longer need.</p>
+            <span className="section-heading__kicker">Past Trips</span>
+            <h2>Your saved itineraries</h2>
           </div>
           <button
             type="button"
             className="secondary-button"
-            onClick={() => void onRefresh()}
-            disabled={loading}
+            onClick={() => void onRefreshTrips()}
+            disabled={loadingSavedTrips}
           >
-            {loading ? "Refreshing..." : "Refresh saved trips"}
+            {loadingSavedTrips ? "Refreshing..." : "Refresh"}
           </button>
         </div>
-      </section>
 
-      {savedTrips.length === 0 && !loading ? (
-        <EmptyState
-          title="Nothing saved yet"
-          text="Once you save an itinerary, it will show up here for quick access."
-        />
-      ) : (
-        <section className="saved-grid">
-          {savedTrips.map((trip) => (
-            <article key={trip._id} className="surface-card saved-card">
-              <div className="saved-card__eyebrow">{formatDateTime(trip.updatedAt)}</div>
-              <h3>{trip.title || trip.tripInput.destinationCity}</h3>
-              <p>
-                {trip.tripInput.destinationCity} • {trip.tripInput.days} day
-                {trip.tripInput.days === 1 ? "" : "s"}
-              </p>
-              <div className="chip-row">
-                {trip.tripInput.interests.map((interest) => (
-                  <span key={interest} className="summary-chip">
-                    {interest}
-                  </span>
-                ))}
-              </div>
-              <div className="saved-card__actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void onLoadTrip(trip._id)}
-                >
-                  Open itinerary
-                </button>
-                <button
-                  type="button"
-                  className="danger-button"
-                  onClick={() => void onDeleteTrip(trip._id)}
-                  disabled={deletingTripId === trip._id}
-                >
-                  {deletingTripId === trip._id ? "Deleting..." : "Delete"}
-                </button>
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
+        {savedTrips.length === 0 && !loadingSavedTrips ? (
+          <p className="past-trips-empty">No saved trips yet. Save an itinerary above to see it here.</p>
+        ) : (
+          <div className="past-trips-grid">
+            {savedTrips.map((trip) => (
+              <article key={trip._id} className="surface-card saved-card">
+                <h3>{trip.title || trip.tripInput.destinationCity}</h3>
+                <p>
+                  {trip.tripInput.destinationCity} · {trip.tripInput.days} day
+                  {trip.tripInput.days === 1 ? "" : "s"}
+                </p>
+                <div className="chip-row">
+                  {trip.tripInput.interests.map((interest) => (
+                    <span key={interest} className="summary-chip">{interest}</span>
+                  ))}
+                </div>
+                <div className="saved-card__actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => void onLoadTrip(trip._id)}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => void onDeleteTrip(trip._id)}
+                    disabled={deletingTripId === trip._id}
+                  >
+                    {deletingTripId === trip._id ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
     </main>
   );
 }
+
 
 type EmptyStateProps = {
   title: string;
@@ -1194,6 +1189,188 @@ function StatCard({ label, value }: { label: string; value: string }) {
     <div className="stat-card">
       <div className="stat-card__label">{label}</div>
       <div className="stat-card__value">{value}</div>
+    </div>
+  );
+}
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username.trim() || !password.trim()) {
+      setError("Please enter both a username and password.");
+      return;
+    }
+    setError("");
+    onLogin();
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="app-background" />
+      <div className="login-shell">
+        <div className="surface-card login-card">
+          <div className="login-card__brand">
+            <span className="hero-kicker">NextStop Planner</span>
+            <h1>Welcome back</h1>
+            <p>Sign in to start planning your next trip.</p>
+          </div>
+
+          <form className="login-form" onSubmit={handleSubmit} noValidate>
+            {error && (
+              <div className="status-banner status-banner--error">{error}</div>
+            )}
+
+            <div className="login-field">
+              <label htmlFor="login-username" className="login-label">
+                Username
+              </label>
+              <input
+                id="login-username"
+                type="text"
+                className="form-control login-input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                autoFocus
+              />
+            </div>
+
+            <div className="login-field">
+              <label htmlFor="login-password" className="login-label">
+                Password
+              </label>
+              <input
+                id="login-password"
+                type="password"
+                className="form-control login-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+
+            <button type="submit" className="primary-button login-submit">
+              Sign In
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SharedItineraryPage({ token, apiBase }: { token: string; apiBase: string }) {
+  const [trip, setTrip] = useState<GenerateResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const response = await fetch(`${apiBase}/api/itinerary/share/${token}`);
+        const data = (await response.json()) as { trip?: GenerateResponse; error?: string };
+        if (!response.ok || !data.trip) throw new Error(data.error || "Not found.");
+        setTrip(data.trip);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load itinerary.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [token, apiBase]);
+
+  return (
+    <div className="app-shell">
+      <div className="app-background" />
+
+      <header className="app-topnav shared-topnav">
+        <div className="app-topnav__brand">
+          <span className="topnav-kicker">NextStop</span>
+          <span className="topnav-title">Planner</span>
+        </div>
+        <span className="shared-badge">Shared itinerary</span>
+        <button
+          type="button"
+          className="secondary-button no-print"
+          onClick={() => window.print()}
+          disabled={!trip}
+        >
+          Export PDF
+        </button>
+      </header>
+
+      <div className="app-page-content">
+        {loading && <div className="loading-panel">Loading shared itinerary...</div>}
+
+        {error && (
+          <div className="surface-card empty-state">
+            <span className="section-heading__kicker">Not found</span>
+            <h2>This link is no longer valid</h2>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {trip && (
+          <main className="page-stack">
+            <section className="surface-card surface-card--hero">
+              <div className="results-hero">
+                <div>
+                  <span className="section-heading__kicker">Shared Itinerary</span>
+                  <h2>{trip.tripInput.destinationCity}</h2>
+                  <p>
+                    {trip.tripInput.days} day trip · view only
+                  </p>
+                </div>
+              </div>
+              <div className="stat-row">
+                <StatCard label="Destination" value={trip.tripInput.destinationCity} />
+                <StatCard label="Trip Length" value={`${trip.tripInput.days} days`} />
+                <StatCard
+                  label="Activities"
+                  value={String(trip.itineraryDays.reduce((sum, day) => sum + day.activities.length, 0))}
+                />
+              </div>
+            </section>
+
+            <section className="itinerary-days">
+              {trip.itineraryDays.map((day) => (
+                <article key={day.dayNumber} className="surface-card day-card">
+                  <div className="day-card__header">
+                    <div>
+                      <span className="section-heading__kicker">Day {day.dayNumber}</span>
+                      <h3>{day.activities.length} planned stop{day.activities.length === 1 ? "" : "s"}</h3>
+                    </div>
+                  </div>
+                  <div className="activity-list">
+                    {day.activities.map((activity) => (
+                      <div key={activity.id} className="activity-card">
+                        <div className="activity-card__content">
+                          <div className="activity-card__slot">
+                            {activity.suggestedTimeSlot || "Flexible"}
+                          </div>
+                          <div className="activity-card__title">{activity.name}</div>
+                          <div className="activity-card__address">
+                            {activity.address || "Address unavailable"}
+                          </div>
+                          <div className="chip-row">
+                            <span className="summary-chip">{activity.category}</span>
+                            <span className="summary-chip">{activity.estimatedDurationMinutes} min</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </section>
+          </main>
+        )}
+      </div>
     </div>
   );
 }

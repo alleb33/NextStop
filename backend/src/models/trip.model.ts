@@ -59,6 +59,7 @@ const tripSchema = new Schema(
     metadata: { type: Schema.Types.Mixed, default: {} },
     notes: { type: [String], default: [] },
     unassignedActivities: { type: [activitySchema], default: [] },
+    shareToken: { type: String, default: null, sparse: true, index: true },
   },
   { timestamps: true }
 );

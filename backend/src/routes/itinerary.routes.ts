@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomUUID } from "crypto";
 import mongoose from "mongoose";
 import Trip from "../models/trip.model";
 import { getCityAttractions } from "../data/cityAttractions";
@@ -1056,6 +1057,49 @@ router.delete("/saved/:id", async (req, res) => {
   } catch (error) {
     console.error("Delete saved itinerary error:", error);
     return res.status(500).json({ error: "Failed to delete itinerary." });
+  }
+});
+
+// Generate (or retrieve) a share token for a saved itinerary
+router.post("/saved/:id/share", async (req, res) => {
+  const { id } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid itinerary id." });
+  }
+
+  try {
+    const existing = await Trip.findById(id).select("shareToken").lean();
+    if (!existing) {
+      return res.status(404).json({ error: "Itinerary not found." });
+    }
+
+    const token = (existing as { shareToken?: string }).shareToken || randomUUID();
+
+    await Trip.findByIdAndUpdate(id, { shareToken: token });
+
+    return res.json({ shareToken: token });
+  } catch (error) {
+    console.error("Share token error:", error);
+    return res.status(500).json({ error: "Failed to generate share link." });
+  }
+});
+
+// Public read-only view by share token — no auth required
+router.get("/share/:token", async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    const trip = await Trip.findOne({ shareToken: token }).lean();
+
+    if (!trip) {
+      return res.status(404).json({ error: "Shared itinerary not found." });
+    }
+
+    return res.json({ trip });
+  } catch (error) {
+    console.error("Load shared itinerary error:", error);
+    return res.status(500).json({ error: "Failed to load shared itinerary." });
   }
 });
 
