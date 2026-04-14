@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: nextstop-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: CONNECTION_STRING
+        sync: false
+      - key: GEOAPIFY_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
