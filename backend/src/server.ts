@@ -7,7 +7,7 @@ import testRoutes from "./routes/test.routes";
 import itineraryRoutes from "./routes/itinerary.routes";
 
 dotenv.config();
-// connectDb();
+connectDb();
 
 const app = express();
 
