@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import mongoose from "mongoose";
 import Trip from "../models/trip.model";
 import { getCityAttractions } from "../data/cityAttractions";
@@ -25,6 +25,8 @@ type GenerateItineraryBody = {
 };
 
 type SaveItineraryBody = {
+  username?: unknown;
+  password?: unknown;
   title?: unknown;
   tripInput?: unknown;
   itineraryDays?: unknown;
@@ -34,6 +36,8 @@ type SaveItineraryBody = {
 };
 
 type UpdateItineraryBody = {
+  username?: unknown;
+  password?: unknown;
   title?: unknown;
   tripInput?: unknown;
   itineraryDays?: unknown;
@@ -67,6 +71,41 @@ type BlockedWindow = {
 };
 
 const router = Router();
+
+const normalizeUsername = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const normalizePassword = (value: unknown) =>
+  typeof value === "string" ? value : "";
+
+const buildOwnerKey = (username: string, password: string) =>
+  createHash("sha256")
+    .update(`${username.toLowerCase()}::${password}`)
+    .digest("hex");
+
+const getAccountFromRequest = (req: {
+  body?: Record<string, unknown>;
+  headers: Record<string, unknown>;
+  query: Record<string, unknown>;
+}) => {
+  const username =
+    normalizeUsername(req.body?.username) ||
+    normalizeUsername(req.headers["x-nextstop-username"]) ||
+    normalizeUsername(req.query.username);
+  const password =
+    normalizePassword(req.body?.password) ||
+    normalizePassword(req.headers["x-nextstop-password"]) ||
+    normalizePassword(req.query.password);
+
+  if (!username || !password) {
+    return null;
+  }
+
+  return {
+    ownerUsername: username,
+    ownerKey: buildOwnerKey(username, password),
+  };
+};
 
 const majorCapitalCities = [
   "Washington, DC, USA",
@@ -923,10 +962,15 @@ router.post("/generate", async (req, res) => {
 
 router.post("/save", async (req, res) => {
   const body = req.body as SaveItineraryBody;
+  const account = getAccountFromRequest(req);
   const tripInput =
     typeof body.tripInput === "object" && body.tripInput !== null ? body.tripInput : null;
   const itineraryDays = Array.isArray(body.itineraryDays) ? body.itineraryDays : null;
   const title = typeof body.title === "string" ? body.title.trim() : "";
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
 
   if (!tripInput || !itineraryDays) {
     return res.status(400).json({
@@ -936,6 +980,8 @@ router.post("/save", async (req, res) => {
 
   try {
     const savedTrip = await Trip.create({
+      ownerUsername: account.ownerUsername,
+      ownerKey: account.ownerKey,
       title,
       tripInput,
       itineraryDays,
@@ -961,8 +1007,14 @@ router.post("/save", async (req, res) => {
 });
 
 router.get("/saved", async (_req, res) => {
+  const account = getAccountFromRequest(_req);
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
+
   try {
-    const trips = await Trip.find({})
+    const trips = await Trip.find({ ownerKey: account.ownerKey })
       .sort({ updatedAt: -1 })
       .limit(20)
       .select("title tripInput.destinationCity tripInput.days tripInput.interests createdAt updatedAt")
@@ -977,13 +1029,18 @@ router.get("/saved", async (_req, res) => {
 
 router.get("/saved/:id", async (req, res) => {
   const { id } = req.params;
+  const account = getAccountFromRequest(req);
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid itinerary id." });
   }
 
   try {
-    const trip = await Trip.findById(id).lean();
+    const trip = await Trip.findOne({ _id: id, ownerKey: account.ownerKey }).lean();
 
     if (!trip) {
       return res.status(404).json({ error: "Itinerary not found." });
@@ -999,6 +1056,11 @@ router.get("/saved/:id", async (req, res) => {
 router.put("/saved/:id", async (req, res) => {
   const { id } = req.params;
   const body = req.body as UpdateItineraryBody;
+  const account = getAccountFromRequest(req);
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid itinerary id." });
@@ -1020,10 +1082,14 @@ router.put("/saved/:id", async (req, res) => {
   }
 
   try {
-    const updatedTrip = await Trip.findByIdAndUpdate(id, updates, {
+    const updatedTrip = await Trip.findOneAndUpdate(
+      { _id: id, ownerKey: account.ownerKey },
+      updates,
+      {
       new: true,
       runValidators: true,
-    }).lean();
+      }
+    ).lean();
 
     if (!updatedTrip) {
       return res.status(404).json({ error: "Itinerary not found." });
@@ -1041,13 +1107,21 @@ router.put("/saved/:id", async (req, res) => {
 
 router.delete("/saved/:id", async (req, res) => {
   const { id } = req.params;
+  const account = getAccountFromRequest(req);
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid itinerary id." });
   }
 
   try {
-    const deletedTrip = await Trip.findByIdAndDelete(id).lean();
+    const deletedTrip = await Trip.findOneAndDelete({
+      _id: id,
+      ownerKey: account.ownerKey,
+    }).lean();
 
     if (!deletedTrip) {
       return res.status(404).json({ error: "Itinerary not found." });
@@ -1063,20 +1137,27 @@ router.delete("/saved/:id", async (req, res) => {
 // Generate (or retrieve) a share token for a saved itinerary
 router.post("/saved/:id/share", async (req, res) => {
   const { id } = req.params;
+  const account = getAccountFromRequest(req);
+
+  if (!account) {
+    return res.status(401).json({ error: "Username and password are required." });
+  }
 
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid itinerary id." });
   }
 
   try {
-    const existing = await Trip.findById(id).select("shareToken").lean();
+    const existing = await Trip.findOne({ _id: id, ownerKey: account.ownerKey })
+      .select("shareToken")
+      .lean();
     if (!existing) {
       return res.status(404).json({ error: "Itinerary not found." });
     }
 
     const token = (existing as { shareToken?: string }).shareToken || randomUUID();
 
-    await Trip.findByIdAndUpdate(id, { shareToken: token });
+    await Trip.findOneAndUpdate({ _id: id, ownerKey: account.ownerKey }, { shareToken: token });
 
     return res.json({ shareToken: token });
   } catch (error) {

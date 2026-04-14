@@ -53,6 +53,8 @@ const tripInputSchema = new Schema(
 
 const tripSchema = new Schema(
   {
+    ownerUsername: { type: String, required: true, trim: true, index: true },
+    ownerKey: { type: String, required: true, index: true },
     title: { type: String, trim: true, default: "" },
     tripInput: { type: tripInputSchema, required: true },
     itineraryDays: { type: [itineraryDaySchema], required: true, default: [] },

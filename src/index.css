@@ -1,5 +1,5 @@
 html {
-  background: #f4f6f2;
+  background: transparent;
 }
 
 body {
@@ -7,10 +7,11 @@ body {
   min-width: 320px;
   min-height: 100vh;
   font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
-  background: #f4f6f2;
-  color: #17322c;
+  background: transparent;
+  color: var(--text, #1f2d3d);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background 220ms ease, color 220ms ease;
 }
 
 * {
@@ -25,6 +26,13 @@ select {
 
 button {
   cursor: pointer;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
 }
 
 #root {

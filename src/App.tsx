@@ -11,6 +11,11 @@ type Interest =
   | "nightlife";
 
 type AppRoute = "/" | "/itinerary" | "/login";
+type ThemeMode = "light" | "dark";
+type AuthCredentials = {
+  username: string;
+  password: string;
+};
 
 type ItineraryActivity = {
   id: string;
@@ -104,9 +109,20 @@ const getRouteFromPath = (pathname: string): AppRoute => {
 
 
 const slotForIndex = (index: number) => timeSlots[Math.min(index, timeSlots.length - 1)];
+const themeStorageKey = "nextstop-theme";
+
+const getInitialTheme = (): ThemeMode => {
+  if (typeof window === "undefined") return "light";
+  const savedTheme = window.localStorage.getItem(themeStorageKey);
+  if (savedTheme === "light" || savedTheme === "dark") {
+    return savedTheme;
+  }
+  return "light";
+};
 
 function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [auth, setAuth] = useState<AuthCredentials | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
   const [route, setRoute] = useState<AppRoute>(getRouteFromPath(window.location.pathname));
   const [destinationCity, setDestinationCity] = useState("Atlanta, GA");
   const [days, setDays] = useState(2);
@@ -131,6 +147,16 @@ function App() {
     {}
   );
   const deferredDestinationCity = useDeferredValue(destinationCity);
+  const isLoggedIn = auth !== null;
+
+  const getAuthHeaders = (credentials: AuthCredentials | null = auth): Record<string, string> => {
+    if (!credentials) return {};
+
+    return {
+      "x-nextstop-username": credentials.username,
+      "x-nextstop-password": credentials.password,
+    };
+  };
 
   const navigate = (nextRoute: AppRoute) => {
     if (window.location.pathname !== nextRoute) {
@@ -197,9 +223,16 @@ function App() {
   };
 
   const loadSavedTrips = async () => {
+    if (!auth) {
+      setSavedTrips([]);
+      return;
+    }
+
     setLoadingSavedTrips(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/itinerary/saved`);
+      const response = await fetch(`${API_BASE_URL}/api/itinerary/saved`, {
+        headers: getAuthHeaders(),
+      });
       const data = (await response.json()) as { trips?: SavedTripSummary[]; error?: string };
       if (!response.ok) {
         throw new Error(data.error || "Failed to load saved itineraries.");
@@ -214,11 +247,15 @@ function App() {
   };
 
   const loadSavedTrip = async (tripId: string) => {
+    if (!auth) return;
+
     setLoading(true);
     setError("");
     setSaveMessage("");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/itinerary/saved/${tripId}`);
+      const response = await fetch(`${API_BASE_URL}/api/itinerary/saved/${tripId}`, {
+        headers: getAuthHeaders(),
+      });
       const data = (await response.json()) as { trip?: GenerateResponse; error?: string };
       if (!response.ok || !data.trip) {
         throw new Error(data.error || "Failed to load itinerary.");
@@ -275,7 +312,7 @@ function App() {
   };
 
   const saveCurrentItinerary = async () => {
-    if (!result) return;
+    if (!result || !auth) return;
 
     setSaving(true);
     setError("");
@@ -289,8 +326,10 @@ function App() {
 
       const response = await fetch(endpoint, {
         method: isUpdate ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({
+          username: auth.username,
+          password: auth.password,
           title: `${result.tripInput.destinationCity} (${result.tripInput.days} day trip)`,
           tripInput: result.tripInput,
           itineraryDays: result.itineraryDays,
@@ -329,6 +368,8 @@ function App() {
   };
 
   const deleteSavedTrip = async (tripId: string) => {
+    if (!auth) return;
+
     setDeletingTripId(tripId);
     setError("");
     setSaveMessage("");
@@ -336,6 +377,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/itinerary/saved/${tripId}`, {
         method: "DELETE",
+        headers: getAuthHeaders(),
       });
 
       const data = (await response.json()) as { error?: string; message?: string };
@@ -419,13 +461,16 @@ function App() {
   };
 
   const copyShareLink = async () => {
-    if (!result?._id) return;
+    if (!result?._id || !auth) return;
     try {
       let token = result.shareToken;
       if (!token) {
         const response = await fetch(
           `${API_BASE_URL}/api/itinerary/saved/${result._id}/share`,
-          { method: "POST" }
+          {
+            method: "POST",
+            headers: getAuthHeaders(),
+          }
         );
         const data = (await response.json()) as { shareToken?: string; error?: string };
         if (!response.ok || !data.shareToken) {
@@ -444,8 +489,37 @@ function App() {
   };
 
   useEffect(() => {
-    void loadSavedTrips();
-  }, []);
+    if (!auth) {
+      setSavedTrips([]);
+      return;
+    }
+
+    const loadTripsForUser = async () => {
+      const authHeaders = {
+        "x-nextstop-username": auth.username,
+        "x-nextstop-password": auth.password,
+      };
+
+      setLoadingSavedTrips(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/itinerary/saved`, {
+          headers: authHeaders,
+        });
+        const data = (await response.json()) as { trips?: SavedTripSummary[]; error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to load saved itineraries.");
+        }
+        setSavedTrips(data.trips || []);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load saved trips";
+        setError(message);
+      } finally {
+        setLoadingSavedTrips(false);
+      }
+    };
+
+    void loadTripsForUser();
+  }, [auth]);
 
   useEffect(() => {
     const city = deferredDestinationCity.trim();
@@ -475,7 +549,7 @@ function App() {
         setSelectedAttractions((current) =>
           current.filter((attraction) => attractions.includes(attraction))
         );
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted || cancelled) return;
         setCityAttractions([]);
         setSelectedAttractions([]);
@@ -503,14 +577,36 @@ function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(themeStorageKey, theme);
+  }, [theme]);
+
   // Shared itinerary view — public, no login required
   if (window.location.pathname.startsWith("/shared/")) {
     const token = window.location.pathname.replace("/shared/", "");
-    return <SharedItineraryPage token={token} apiBase={API_BASE_URL} />;
+    return (
+      <SharedItineraryPage
+        token={token}
+        apiBase={API_BASE_URL}
+        theme={theme}
+        onToggleTheme={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+      />
+    );
   }
 
   if (!isLoggedIn) {
-    return <LoginPage onLogin={() => setIsLoggedIn(true)} />;
+    return (
+      <LoginPage
+        onLogin={(nextAuth) => {
+          setAuth(nextAuth);
+          setError("");
+          setSaveMessage("");
+        }}
+        theme={theme}
+        onToggleTheme={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+      />
+    );
   }
 
   return (
@@ -537,13 +633,34 @@ function App() {
           ))}
         </nav>
 
-        <button
-          type="button"
-          className="logout-button"
-          onClick={() => setIsLoggedIn(false)}
-        >
-          Sign Out
-        </button>
+        <div className="topnav-actions">
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          >
+            <span className="theme-toggle__icon" aria-hidden="true">
+              {theme === "light" ? "◐" : "◑"}
+            </span>
+            <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+          </button>
+
+          <button
+            type="button"
+            className="logout-button"
+            onClick={() => {
+              setAuth(null);
+              setResult(null);
+              setSavedTrips([]);
+              setError("");
+              setSaveMessage("");
+              navigate("/");
+            }}
+          >
+            Sign Out
+          </button>
+        </div>
       </header>
 
       <div className="app-page-content">
@@ -662,12 +779,25 @@ function DetailsPage({
   return (
     <main className="page-stack">
       <section className="surface-card surface-card--form">
+        <div className="planner-hero">
+          <div>
+            <span className="hero-kicker">City trip planner</span>
+            <h1>Build your travel itinerary!</h1>
+            <p>
+              Choose a destination, pick your interests, and put in any blocked times in your schedule.
+            </p>
+          </div>
+          <div className="planner-hero__badge">
+            <span>Quick setup</span>
+            <strong>Food, landmarks, museums, outdoors, shopping, and nightlife</strong>
+          </div>
+        </div>
+
         <div className="section-heading">
           <span className="section-heading__kicker">Trip Setup</span>
-          <h2>Enter the details for your trip.</h2>
+          <h2>Set up your trip.</h2>
           <p>
-            This is the first page people see. Fill it out and we will take them straight to
-            the generated itinerary page.
+            Fill this out first, then generate the itinerary.
           </p>
         </div>
 
@@ -926,7 +1056,7 @@ function ItineraryPage({
     return (
       <EmptyState
         title="No itinerary yet"
-        text="Start on the planning page to generate a trip before reviewing it here."
+        text="Generate a trip on the details page first."
         primaryAction={{
           label: "Go to trip details",
           onClick: () => onNavigate("/"),
@@ -942,10 +1072,7 @@ function ItineraryPage({
           <div>
             <span className="section-heading__kicker">Generated Itinerary</span>
             <h2>{result?.tripInput.destinationCity || "Building your trip..."}</h2>
-            <p>
-              Review the schedule, move activities around, and save the version you want
-              to keep.
-            </p>
+            <p>Review it, make edits, and save when you are ready.</p>
           </div>
 
           <div className="hero-actions">
@@ -1193,7 +1320,15 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function LoginPage({ onLogin }: { onLogin: () => void }) {
+function LoginPage({
+  onLogin,
+  theme,
+  onToggleTheme,
+}: {
+  onLogin: (credentials: AuthCredentials) => void;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -1205,7 +1340,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
       return;
     }
     setError("");
-    onLogin();
+    onLogin({ username: username.trim(), password });
   };
 
   return (
@@ -1213,10 +1348,24 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
       <div className="app-background" />
       <div className="login-shell">
         <div className="surface-card login-card">
+          <div className="login-card__topbar">
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={onToggleTheme}
+              aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            >
+              <span className="theme-toggle__icon" aria-hidden="true">
+                {theme === "light" ? "◐" : "◑"}
+              </span>
+              <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+            </button>
+          </div>
+
           <div className="login-card__brand">
             <span className="hero-kicker">NextStop Planner</span>
             <h1>Welcome back</h1>
-            <p>Sign in to start planning your next trip.</p>
+            <p>Sign in to start planning.</p>
           </div>
 
           <form className="login-form" onSubmit={handleSubmit} noValidate>
@@ -1263,7 +1412,17 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   );
 }
 
-function SharedItineraryPage({ token, apiBase }: { token: string; apiBase: string }) {
+function SharedItineraryPage({
+  token,
+  apiBase,
+  theme,
+  onToggleTheme,
+}: {
+  token: string;
+  apiBase: string;
+  theme: ThemeMode;
+  onToggleTheme: () => void;
+}) {
   const [trip, setTrip] = useState<GenerateResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1294,14 +1453,27 @@ function SharedItineraryPage({ token, apiBase }: { token: string; apiBase: strin
           <span className="topnav-title">Planner</span>
         </div>
         <span className="shared-badge">Shared itinerary</span>
-        <button
-          type="button"
-          className="secondary-button no-print"
-          onClick={() => window.print()}
-          disabled={!trip}
-        >
-          Export PDF
-        </button>
+        <div className="topnav-actions">
+          <button
+            type="button"
+            className="theme-toggle no-print"
+            onClick={onToggleTheme}
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          >
+            <span className="theme-toggle__icon" aria-hidden="true">
+              {theme === "light" ? "◐" : "◑"}
+            </span>
+            <span>{theme === "light" ? "Dark mode" : "Light mode"}</span>
+          </button>
+          <button
+            type="button"
+            className="secondary-button no-print"
+            onClick={() => window.print()}
+            disabled={!trip}
+          >
+            Export PDF
+          </button>
+        </div>
       </header>
 
       <div className="app-page-content">
