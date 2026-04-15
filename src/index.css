@@ -1,0 +1,40 @@
+html {
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  background: transparent;
+  color: var(--text, #1f2d3d);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background 220ms ease, color 220ms ease;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}

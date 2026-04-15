@@ -1,0 +1,71 @@
+import mongoose, { Schema } from "mongoose";
+
+const activitySchema = new Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    category: { type: String, required: true },
+    address: { type: String, default: "" },
+    suggestedTimeSlot: { type: String, default: "" },
+    estimatedDurationMinutes: { type: Number, default: 60 },
+    coordinates: {
+      lon: { type: Number, default: null },
+      lat: { type: Number, default: null },
+    },
+    source: { type: String, default: "geoapify" },
+  },
+  { _id: false }
+);
+
+const itineraryDaySchema = new Schema(
+  {
+    dayNumber: { type: Number, required: true },
+    activities: { type: [activitySchema], default: [] },
+  },
+  { _id: false }
+);
+
+const tripInputSchema = new Schema(
+  {
+    destinationCity: { type: String, required: true, trim: true },
+    days: { type: Number, required: true, min: 1, max: 14 },
+    interests: { type: [String], default: [] },
+    selectedAttractions: { type: [String], default: [] },
+    constraints: {
+      maxActivitiesPerDay: { type: Number, default: 3 },
+      blockedWindows: {
+        type: [
+          new Schema(
+            {
+              day: { type: Number, required: true },
+              timeSlot: { type: String, required: true },
+              label: { type: String, default: "" },
+            },
+            { _id: false }
+          ),
+        ],
+        default: [],
+      },
+    },
+  },
+  { _id: false }
+);
+
+const tripSchema = new Schema(
+  {
+    ownerUsername: { type: String, required: true, trim: true, index: true },
+    ownerKey: { type: String, required: true, index: true },
+    title: { type: String, trim: true, default: "" },
+    tripInput: { type: tripInputSchema, required: true },
+    itineraryDays: { type: [itineraryDaySchema], required: true, default: [] },
+    metadata: { type: Schema.Types.Mixed, default: {} },
+    notes: { type: [String], default: [] },
+    unassignedActivities: { type: [activitySchema], default: [] },
+    shareToken: { type: String, default: null, sparse: true, index: true },
+  },
+  { timestamps: true }
+);
+
+const Trip = mongoose.models.Trip || mongoose.model("Trip", tripSchema);
+
+export default Trip;
