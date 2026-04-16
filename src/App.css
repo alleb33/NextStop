@@ -294,6 +294,51 @@
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
+.trip-view-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.trip-day-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.trip-day-pill {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 138px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 0.85rem 1rem;
+  background: rgba(255, 255, 255, 0.54);
+  text-align: left;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.trip-day-pill:hover,
+.trip-day-pill:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(28, 93, 115, 0.24);
+  box-shadow: var(--shadow-soft);
+}
+
+.trip-day-pill.is-active {
+  background: var(--primary-soft);
+  border-color: rgba(28, 93, 115, 0.32);
+}
+
+.trip-day-pill__label {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.trip-day-pill__meta {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
 .status-stack {
   display: grid;
   gap: 0.75rem;
@@ -614,6 +659,147 @@
   margin-top: 0.45rem;
 }
 
+.trip-map-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.trip-map-card,
+.trip-route-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.trip-map-card__header h3 {
+  margin: 0.25rem 0 0;
+}
+
+.trip-map-card__header p {
+  margin: 0;
+  max-width: 34ch;
+}
+
+.trip-map {
+  display: grid;
+  gap: 1rem;
+  flex: 1;
+}
+
+.trip-map--empty {
+  min-height: 420px;
+  place-items: center;
+  text-align: center;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.38);
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.trip-map__canvas {
+  width: 100%;
+  min-height: 420px;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(28, 93, 115, 0.08);
+}
+
+.trip-map__leaflet {
+  width: 100%;
+  height: 420px;
+}
+
+.trip-map__leaflet .leaflet-control-attribution {
+  font-size: 0.66rem;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.trip-map__leaflet .leaflet-tooltip {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+}
+
+.trip-map__polyline {
+  stroke: var(--primary);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+}
+
+.trip-map-pin {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: white;
+  border: 3px solid rgba(255, 255, 255, 0.82);
+  box-shadow: 0 10px 22px rgba(20, 61, 75, 0.22);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.trip-map__legend {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.trip-map__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--text);
+}
+
+.trip-map__legend-index,
+.trip-stop-card__index {
+  display: inline-grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: white;
+  font-size: 0.84rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.trip-stop-list {
+  display: grid;
+  gap: 0.85rem;
+  overflow-y: auto;
+  max-height: 420px;
+  padding-right: 0.25rem;
+}
+
+.trip-stop-card {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.trip-stop-card__content {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.trip-stop-card__distance {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 .empty-state {
   padding: 3rem 1.5rem;
 }
@@ -875,6 +1061,11 @@
     align-items: end;
   }
 
+  .trip-view-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+    align-items: start;
+  }
+
   .field-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -886,6 +1077,19 @@
 
 @media (max-width: 767px) {
   .activity-card {
+    flex-direction: column;
+  }
+
+  .trip-map__canvas,
+  .trip-map__leaflet,
+  .trip-stop-list,
+  .trip-map--empty {
+    min-height: 320px;
+    max-height: none;
+    height: 320px;
+  }
+
+  .trip-stop-card {
     flex-direction: column;
   }
 

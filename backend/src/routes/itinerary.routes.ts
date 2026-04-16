@@ -458,6 +458,37 @@ const createCuratedActivity = (name: string, destinationCity: string): Activity 
 });
 
 const TIME_SLOTS = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"] as const;
+const DEFAULT_TRAVEL_DISTANCE_MILES = 2.5;
+
+const hasCoordinates = (
+  activity: Activity
+): activity is Activity & { coordinates: { lat: number; lon: number } } =>
+  typeof activity.coordinates.lat === "number" && typeof activity.coordinates.lon === "number";
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+
+const getDistanceMiles = (first: Activity, second: Activity) => {
+  if (!hasCoordinates(first) || !hasCoordinates(second)) {
+    return DEFAULT_TRAVEL_DISTANCE_MILES;
+  }
+
+  const firstLat = first.coordinates.lat;
+  const firstLon = first.coordinates.lon;
+  const secondLat = second.coordinates.lat;
+  const secondLon = second.coordinates.lon;
+
+  const earthRadiusMiles = 3958.8;
+  const deltaLat = toRadians(secondLat - firstLat);
+  const deltaLon = toRadians(secondLon - firstLon);
+  const lat1 = toRadians(firstLat);
+  const lat2 = toRadians(secondLat);
+
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+
+  return earthRadiusMiles * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 
 /** Returns preferred time slots for a category, from most to least preferred. */
 const getCategoryTimePreference = (category: string): string[] => {
@@ -513,6 +544,53 @@ const getCategoryTimePreference = (category: string): string[] => {
   return [...TIME_SLOTS];
 };
 
+const getEarliestPreferenceIndex = (activity: Activity) =>
+  getCategoryTimePreference(activity.category).reduce((bestIndex, slot) => {
+    const currentIndex = TIME_SLOTS.indexOf(slot as (typeof TIME_SLOTS)[number]);
+    return currentIndex >= 0 ? Math.min(bestIndex, currentIndex) : bestIndex;
+  }, TIME_SLOTS.length - 1);
+
+const orderActivitiesForDay = (
+  activities: Activity[],
+  availableSlots: string[]
+) => {
+  if (activities.length <= 1) return activities;
+
+  const slotCount = Math.max(availableSlots.length - 1, 1);
+  const remaining = [...activities];
+  remaining.sort((left, right) => {
+    const preferenceGap = getEarliestPreferenceIndex(left) - getEarliestPreferenceIndex(right);
+    if (preferenceGap !== 0) return preferenceGap;
+    return Number(hasCoordinates(right)) - Number(hasCoordinates(left));
+  });
+
+  const ordered = [remaining.shift()!];
+
+  while (remaining.length > 0) {
+    const current = ordered[ordered.length - 1];
+    const targetSlotIndex = Math.min(ordered.length, slotCount);
+
+    let bestIndex = 0;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    remaining.forEach((candidate, index) => {
+      const travelPenalty = getDistanceMiles(current, candidate);
+      const timePenalty = Math.abs(getEarliestPreferenceIndex(candidate) - targetSlotIndex) * 0.85;
+      const coordinatePenalty = hasCoordinates(candidate) ? 0 : 1.5;
+      const score = travelPenalty + timePenalty + coordinatePenalty;
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    ordered.push(...remaining.splice(bestIndex, 1));
+  }
+
+  return ordered;
+};
+
 /** Groups scored activities by interest category (preserving score order within each group). */
 const groupByInterest = (
   scored: Array<{ activity: Activity; score: number }>,
@@ -558,46 +636,12 @@ const assignTimeSlotsForDay = (
 ): Array<Activity & { suggestedTimeSlot: string }> => {
   if (activities.length === 0) return [];
 
-  // Sort activities by their earliest preferred slot so night activities end up last
-  const withPrefs = activities.map((activity) => ({
-    activity,
-    prefs: getCategoryTimePreference(activity.category),
+  const routeOrdered = orderActivitiesForDay(activities, availableSlots);
+
+  return routeOrdered.slice(0, availableSlots.length).map((activity, index) => ({
+    ...activity,
+    suggestedTimeSlot: availableSlots[index] || availableSlots[availableSlots.length - 1],
   }));
-  withPrefs.sort((a, b) => {
-    const earliest = (prefs: string[]) =>
-      prefs.reduce((min, slot) => {
-        const idx = TIME_SLOTS.indexOf(slot as (typeof TIME_SLOTS)[number]);
-        return idx >= 0 ? Math.min(min, idx) : min;
-      }, 99);
-    return earliest(a.prefs) - earliest(b.prefs);
-  });
-
-  // Greedily assign slots based on preference, then fall back to any free slot
-  const usedSlots = new Set<string>();
-  const assigned: Array<Activity & { suggestedTimeSlot: string }> = [];
-  withPrefs.forEach(({ activity, prefs }) => {
-    let chosenSlot: string | undefined;
-    for (const pref of prefs) {
-      if (availableSlots.includes(pref) && !usedSlots.has(pref)) {
-        chosenSlot = pref;
-        break;
-      }
-    }
-    if (!chosenSlot) {
-      chosenSlot = TIME_SLOTS.find((s) => availableSlots.includes(s) && !usedSlots.has(s));
-    }
-    if (chosenSlot) {
-      usedSlots.add(chosenSlot);
-      assigned.push({ ...activity, suggestedTimeSlot: chosenSlot });
-    }
-  });
-
-  // Return sorted in chronological time-slot order
-  return assigned.sort(
-    (a, b) =>
-      TIME_SLOTS.indexOf(a.suggestedTimeSlot as (typeof TIME_SLOTS)[number]) -
-      TIME_SLOTS.indexOf(b.suggestedTimeSlot as (typeof TIME_SLOTS)[number])
-  );
 };
 
 const buildItinerary = (
@@ -941,8 +985,8 @@ router.post("/generate", async (req, res) => {
         geoFilter: filter,
       },
       notes: [
-        "Activities are spread across categories each day — food, landmarks, museums, etc. are distributed evenly.",
-        "Time slots are category-aware: nightlife → evening/night, parks → morning, restaurants → meal times.",
+        "Activities are spread across categories each day so the plan stays varied.",
+        "Stops are ordered with a travel heuristic that balances category timing and distance between places when coordinates are available.",
         selectedAttractions.length > 0
           ? "Selected attractions are placed into the itinerary before other category picks."
           : "Pick must-see attractions on supported cities to lock them into the plan first.",

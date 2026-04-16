@@ -1,5 +1,9 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
+import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { divIcon, latLngBounds } from "leaflet";
+import type { LatLngExpression } from "leaflet";
+import "leaflet/dist/leaflet.css";
 import "./App.css";
 
 type Interest =
@@ -10,11 +14,16 @@ type Interest =
   | "shopping"
   | "nightlife";
 
-type AppRoute = "/" | "/itinerary" | "/login";
+type AppRoute = "/" | "/itinerary" | "/trip-view" | "/login";
 type ThemeMode = "light" | "dark";
 type AuthCredentials = {
   username: string;
   password: string;
+};
+
+type ActivityCoordinates = {
+  lon: number | null;
+  lat: number | null;
 };
 
 type ItineraryActivity = {
@@ -24,6 +33,7 @@ type ItineraryActivity = {
   address: string;
   suggestedTimeSlot?: string;
   estimatedDurationMinutes: number;
+  coordinates?: ActivityCoordinates;
 };
 
 type ItineraryDay = {
@@ -98,18 +108,88 @@ const interestOptions: { value: Interest; label: string; description: string }[]
 const navItems: NavItem[] = [
   { route: "/", label: "Trip Details", eyebrow: "Step 1" },
   { route: "/itinerary", label: "Itinerary", eyebrow: "Step 2" },
+  { route: "/trip-view", label: "View Trip", eyebrow: "Step 3" },
 ];
 
 const timeSlots = ["Morning", "Late Morning", "Afternoon", "Evening", "Night"];
 
 const getRouteFromPath = (pathname: string): AppRoute => {
   if (pathname === "/itinerary") return "/itinerary";
+  if (pathname === "/trip-view") return "/trip-view";
   return "/";
 };
 
 
 const slotForIndex = (index: number) => timeSlots[Math.min(index, timeSlots.length - 1)];
 const themeStorageKey = "nextstop-theme";
+const hasCoordinates = (
+  activity: ItineraryActivity
+): activity is ItineraryActivity & { coordinates: { lon: number; lat: number } } =>
+  Boolean(
+    activity.coordinates &&
+      typeof activity.coordinates.lon === "number" &&
+      typeof activity.coordinates.lat === "number"
+  );
+
+const toRadians = (value: number) => (value * Math.PI) / 180;
+
+const getDistanceMiles = (
+  start: { lat: number; lon: number },
+  end: { lat: number; lon: number }
+) => {
+  const earthRadiusMiles = 3958.8;
+  const deltaLat = toRadians(end.lat - start.lat);
+  const deltaLon = toRadians(end.lon - start.lon);
+  const lat1 = toRadians(start.lat);
+  const lat2 = toRadians(end.lat);
+
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+
+  return earthRadiusMiles * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const getDayRouteDistance = (activities: ItineraryActivity[]) => {
+  let total = 0;
+  for (let index = 1; index < activities.length; index += 1) {
+    const previous = activities[index - 1];
+    const current = activities[index];
+    if (!hasCoordinates(previous) || !hasCoordinates(current)) continue;
+    total += getDistanceMiles(previous.coordinates, current.coordinates);
+  }
+  return total;
+};
+
+const formatDistance = (distance: number) =>
+  distance < 0.1 ? "< 0.1 mi" : `${distance.toFixed(1)} mi`;
+
+function FitMapToPoints({ points }: { points: LatLngExpression[] }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (points.length === 0) return;
+
+    if (points.length === 1) {
+      map.setView(points[0], 13);
+      return;
+    }
+
+    map.fitBounds(latLngBounds(points), {
+      padding: [32, 32],
+    });
+  }, [map, points]);
+
+  return null;
+}
+
+const createStopIcon = (label: string) =>
+  divIcon({
+    className: "trip-map-pin-icon",
+    html: `<div class="trip-map-pin">${label}</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
 
 const getInitialTheme = (): ThemeMode => {
   if (typeof window === "undefined") return "light";
@@ -246,7 +326,7 @@ function App() {
     }
   };
 
-  const loadSavedTrip = async (tripId: string) => {
+  const loadSavedTrip = async (tripId: string, targetRoute: AppRoute = "/itinerary") => {
     if (!auth) return;
 
     setLoading(true);
@@ -263,7 +343,7 @@ function App() {
 
       setResult(data.trip);
       syncTripInputs(data.trip);
-      navigate("/itinerary");
+      navigate(targetRoute);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load itinerary";
       setError(message);
@@ -718,6 +798,14 @@ function App() {
             onNavigate={navigate}
           />
         )}
+
+        {route === "/trip-view" && (
+          <TripViewPage
+            result={result}
+            loading={loading}
+            onNavigate={navigate}
+          />
+        )}
       </div>
     </div>
   );
@@ -1027,7 +1115,7 @@ type ItineraryPageProps = {
   onPrint: () => void;
   onRemoveActivity: (dayNumber: number, activityId: string) => void;
   onAddUnassigned: (dayNumber: number) => void;
-  onLoadTrip: (tripId: string) => Promise<void>;
+  onLoadTrip: (tripId: string, targetRoute?: AppRoute) => Promise<void>;
   onDeleteTrip: (tripId: string) => Promise<void>;
   onRefreshTrips: () => Promise<void>;
   onNavigate: (route: AppRoute) => void;
@@ -1052,32 +1140,33 @@ function ItineraryPage({
   onRefreshTrips,
   onNavigate,
 }: ItineraryPageProps) {
-  if (!result && !loading) {
-    return (
-      <EmptyState
-        title="No itinerary yet"
-        text="Generate a trip on the details page first."
-        primaryAction={{
-          label: "Go to trip details",
-          onClick: () => onNavigate("/"),
-        }}
-      />
-    );
-  }
-
   return (
     <main className="page-stack">
       <section className="surface-card surface-card--hero">
         <div className="results-hero">
           <div>
-            <span className="section-heading__kicker">Generated Itinerary</span>
-            <h2>{result?.tripInput.destinationCity || "Building your trip..."}</h2>
-            <p>Review it, make edits, and save when you are ready.</p>
+            <span className="section-heading__kicker">
+              {result ? "Generated Itinerary" : "Saved Trips"}
+            </span>
+            <h2>{result?.tripInput.destinationCity || "Open a saved trip or generate a new one."}</h2>
+            <p>
+              {result
+                ? "Review it, make edits, and save when you are ready."
+                : "Your saved itineraries will show up here as soon as you sign in."}
+            </p>
           </div>
 
           <div className="hero-actions">
             <button type="button" className="secondary-button" onClick={() => onNavigate("/")}>
               Edit trip details
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => onNavigate("/trip-view")}
+              disabled={!result}
+            >
+              View trip map
             </button>
             <button
               type="button"
@@ -1109,7 +1198,7 @@ function ItineraryPage({
 
         {loading && <div className="loading-panel">Generating itinerary from live place data...</div>}
 
-        {result && (
+        {result ? (
           <div className="stat-row">
             <StatCard label="Destination" value={result.tripInput.destinationCity} />
             <StatCard label="Trip Length" value={`${result.tripInput.days} days`} />
@@ -1121,6 +1210,10 @@ function ItineraryPage({
               label="Unassigned"
               value={String(result.unassignedActivities?.length || 0)}
             />
+          </div>
+        ) : (
+          <div className="empty-inline">
+            No active itinerary is open right now. Use the saved trips below or generate a new one.
           </div>
         )}
       </section>
@@ -1262,9 +1355,16 @@ function ItineraryPage({
                   <button
                     type="button"
                     className="primary-button"
-                    onClick={() => void onLoadTrip(trip._id)}
+                    onClick={() => void onLoadTrip(trip._id, "/itinerary")}
                   >
                     Open
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => void onLoadTrip(trip._id, "/trip-view")}
+                  >
+                    Map
                   </button>
                   <button
                     type="button"
@@ -1281,6 +1381,226 @@ function ItineraryPage({
         )}
       </section>
     </main>
+  );
+}
+
+function TripViewPage({
+  result,
+  loading,
+  onNavigate,
+}: {
+  result: GenerateResponse | null;
+  loading: boolean;
+  onNavigate: (route: AppRoute) => void;
+}) {
+  const [selectedDayNumber, setSelectedDayNumber] = useState<number | null>(null);
+
+  if (!result && !loading) {
+    return (
+      <EmptyState
+        title="No trip to view yet"
+        text="Generate or open an itinerary first."
+        primaryAction={{
+          label: "Go to itinerary",
+          onClick: () => onNavigate("/itinerary"),
+        }}
+      />
+    );
+  }
+
+  const selectedDay =
+    result?.itineraryDays.find((day) => day.dayNumber === selectedDayNumber) ||
+    result?.itineraryDays[0] ||
+    null;
+
+  const mappedStops = selectedDay ? selectedDay.activities.filter(hasCoordinates) : [];
+  const totalDistance = selectedDay ? getDayRouteDistance(selectedDay.activities) : 0;
+
+  return (
+    <main className="page-stack">
+      <section className="surface-card surface-card--hero">
+        <div className="results-hero">
+          <div>
+            <span className="section-heading__kicker">Trip View</span>
+            <h2>{result?.tripInput.destinationCity || "Loading trip..."}</h2>
+            <p>Pick a day to see where each stop is and how far the route goes.</p>
+          </div>
+
+          <div className="hero-actions">
+            <button type="button" className="secondary-button" onClick={() => onNavigate("/itinerary")}>
+              Back to itinerary
+            </button>
+          </div>
+        </div>
+
+        {result && (
+          <div className="stat-row">
+            <StatCard label="Days" value={`${result.tripInput.days}`} />
+            <StatCard label="Stops Today" value={`${selectedDay?.activities.length || 0}`} />
+            <StatCard label="Mapped Stops" value={`${mappedStops.length}`} />
+            <StatCard label="Route Distance" value={formatDistance(totalDistance)} />
+          </div>
+        )}
+      </section>
+
+      {result && (
+        <>
+          <section className="surface-card surface-card--compact">
+            <div className="trip-day-switcher">
+              {result.itineraryDays.map((day) => (
+                <button
+                  key={day.dayNumber}
+                  type="button"
+                  className={`trip-day-pill ${selectedDay?.dayNumber === day.dayNumber ? "is-active" : ""}`}
+                  onClick={() => setSelectedDayNumber(day.dayNumber)}
+                >
+                  <span className="trip-day-pill__label">Day {day.dayNumber}</span>
+                  <span className="trip-day-pill__meta">
+                    {day.activities.length} stop{day.activities.length === 1 ? "" : "s"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {selectedDay && (
+            <section className="trip-view-grid">
+              <section className="surface-card trip-map-card">
+                <div className="trip-map-card__header">
+                  <div>
+                    <span className="section-heading__kicker">Day {selectedDay.dayNumber}</span>
+                    <h3>Trip map</h3>
+                  </div>
+                  <p className="helper-text">
+                    {mappedStops.length > 1
+                      ? "Stops are connected in itinerary order."
+                      : "Add more mapped stops to see the route line."}
+                  </p>
+                </div>
+
+                <TripMap activities={selectedDay.activities} />
+              </section>
+
+              <section className="surface-card trip-route-card">
+                <div className="trip-map-card__header">
+                  <div>
+                    <span className="section-heading__kicker">Route Details</span>
+                    <h3>Stops and spacing</h3>
+                  </div>
+                  <p className="helper-text">
+                    Distances are based on each stop in the order it appears in the itinerary.
+                  </p>
+                </div>
+
+                {selectedDay.activities.length === 0 ? (
+                  <div className="empty-inline">No activities planned for this day yet.</div>
+                ) : (
+                  <div className="trip-stop-list">
+                    {selectedDay.activities.map((activity, index) => {
+                      const previous = index > 0 ? selectedDay.activities[index - 1] : null;
+                      const hopDistance =
+                        previous && hasCoordinates(previous) && hasCoordinates(activity)
+                          ? getDistanceMiles(previous.coordinates, activity.coordinates)
+                          : null;
+
+                      return (
+                        <article key={activity.id} className="trip-stop-card">
+                          <div className="trip-stop-card__index">{index + 1}</div>
+                          <div className="trip-stop-card__content">
+                            <div className="activity-card__slot">
+                              {activity.suggestedTimeSlot || "Flexible"}
+                            </div>
+                            <div className="activity-card__title">{activity.name}</div>
+                            <div className="activity-card__address">
+                              {activity.address || "Address unavailable"}
+                            </div>
+                            <div className="chip-row">
+                              <span className="summary-chip">{activity.category}</span>
+                              <span className="summary-chip">
+                                {activity.estimatedDurationMinutes} min
+                              </span>
+                              <span className="summary-chip">
+                                {hasCoordinates(activity) ? "Mapped" : "No map data"}
+                              </span>
+                            </div>
+                            {index > 0 && (
+                              <div className="trip-stop-card__distance">
+                                From previous stop:{" "}
+                                {hopDistance === null ? "distance unavailable" : formatDistance(hopDistance)}
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </section>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
+function TripMap({ activities }: { activities: ItineraryActivity[] }) {
+  const points = activities.filter(hasCoordinates);
+
+  if (points.length === 0) {
+    return (
+      <div className="trip-map trip-map--empty">
+        <p>No map coordinates are available for this day yet.</p>
+      </div>
+    );
+  }
+
+  const routePoints: LatLngExpression[] = points.map((activity) => [
+    activity.coordinates.lat,
+    activity.coordinates.lon,
+  ]);
+  const centerPoint = routePoints[0];
+
+  return (
+    <div className="trip-map">
+      <div className="trip-map__canvas">
+        <MapContainer
+          center={centerPoint}
+          zoom={13}
+          scrollWheelZoom
+          className="trip-map__leaflet"
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <FitMapToPoints points={routePoints} />
+          {routePoints.length > 1 && <Polyline positions={routePoints} className="trip-map__polyline" />}
+          {points.map((activity, index) => (
+            <Marker
+              key={activity.id}
+              position={[activity.coordinates.lat, activity.coordinates.lon]}
+              icon={createStopIcon(String(index + 1))}
+            >
+              <Tooltip direction="top" offset={[0, -18]}>
+                <strong>{activity.name}</strong>
+                <br />
+                {activity.address || "Address unavailable"}
+              </Tooltip>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
+
+      <div className="trip-map__legend">
+        {points.map((activity, index) => (
+          <div key={activity.id} className="trip-map__legend-item">
+            <span className="trip-map__legend-index">{index + 1}</span>
+            <span>{activity.name}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
