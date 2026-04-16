@@ -602,6 +602,13 @@ function App() {
   }, [auth]);
 
   useEffect(() => {
+    if (!isLoggedIn) {
+      setCityAttractions([]);
+      setSelectedAttractions([]);
+      setLoadingCityAttractions(false);
+      return;
+    }
+
     const city = deferredDestinationCity.trim();
     if (!city) {
       setCityAttractions([]);
@@ -646,7 +653,7 @@ function App() {
       cancelled = true;
       controller.abort();
     };
-  }, [deferredDestinationCity]);
+  }, [deferredDestinationCity, isLoggedIn]);
 
   useEffect(() => {
     const handlePopState = () => {

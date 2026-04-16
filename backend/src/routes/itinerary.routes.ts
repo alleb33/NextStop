@@ -781,11 +781,11 @@ router.get("/city-attractions", (req, res) => {
 
 router.post("/generate", async (req, res) => {
   const body = req.body as GenerateItineraryBody;
-  const apiKey = process.env.GEOAPIFY_API_KEY;
+  const apiKey = process.env.GEOAPIFY_API_KEY?.trim();
 
-  if (!apiKey) {
+  if (!apiKey || apiKey === "your_geoapify_api_key") {
     return res.status(500).json({
-      error: "Missing GEOAPIFY_API_KEY in backend environment variables.",
+      error: "Missing valid GEOAPIFY_API_KEY in backend environment variables.",
     });
   }
 
